@@ -13,10 +13,12 @@ install ones you trust.
 
 import importlib.util
 import json
+import logging
 import os
+import re
 import sys
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
@@ -25,6 +27,11 @@ from PySide6.QtWidgets import QDockWidget
 from .settings import APP_HOME, load_json, save_json
 from .theme import theme
 
+log = logging.getLogger(__name__)
+
+ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
+# A plugin calling sys.exit() mustn't take the whole app down.
+PLUGIN_ERRORS = (Exception, SystemExit)
 EVENTS = {
     "document_opened",  # (document)
     "document_closed",  # (document)
@@ -44,6 +51,25 @@ class PluginInfo:
     api: object = None
     error: str = ""
     active: bool = False
+    invalid: bool = False
+
+
+def read_manifest(path, folder):
+    """Return a PluginInfo from a plugin.json. Raises ValueError or OSError if it's unusable."""
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("it must be a JSON object")
+    plugin_id = data.get("id")
+    if not isinstance(plugin_id, str) or not ID_PATTERN.fullmatch(plugin_id):
+        raise ValueError('"id" must use only letters, digits, - and _')
+    for key in ("name", "description"):
+        if not isinstance(data.get(key, ""), str):
+            raise ValueError(f'"{key}" must be text')
+    version = data.get("version", "")
+    if not isinstance(version, (str, int, float)):
+        raise ValueError('"version" must be text')
+    return PluginInfo(plugin_id, data.get("name") or plugin_id, str(version), data.get("description", ""), folder)
 
 
 @dataclass
@@ -174,17 +200,10 @@ class PluginManager:
                 if not os.path.isfile(manifest):
                     continue
                 try:
-                    with open(manifest, encoding="utf-8") as f:
-                        data = json.load(f)
-                    info = PluginInfo(
-                        id=data["id"],
-                        name=data.get("name", data["id"]),
-                        version=str(data.get("version", "")),
-                        description=data.get("description", ""),
-                        folder=folder,
-                    )
-                except Exception as e:
-                    info = PluginInfo(name, name, "", "", folder, error=f"Bad plugin.json: {e}")
+                    info = read_manifest(manifest, folder)
+                except (OSError, ValueError) as e:
+                    log.warning("Bad plugin.json in %s: %s", folder, e)
+                    info = PluginInfo(name, name, "", "", folder, error=f"Bad plugin.json: {e}", invalid=True)
                 self.plugins.setdefault(info.id, info)
 
     def load_enabled(self):
@@ -213,11 +232,17 @@ class PluginManager:
         )
         module = importlib.util.module_from_spec(spec)
         sys.modules[name] = module
-        spec.loader.exec_module(module)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules[name]
+            raise
         return module
 
     def activate(self, plugin_id):
         info = self.plugins[plugin_id]
+        if info.invalid:
+            return False
         if info.active:
             return True
         info.error = ""
@@ -228,8 +253,9 @@ class PluginManager:
             info.module.activate(api)
             info.active = True
             return True
-        except Exception:
+        except PLUGIN_ERRORS:
             info.error = traceback.format_exc()
+            log.error("Plugin %s failed to start\n%s", info.id, info.error)
             api._teardown()
             info.api = None
             return False
@@ -241,8 +267,9 @@ class PluginManager:
         try:
             if hasattr(info.module, "deactivate"):
                 info.module.deactivate()
-        except Exception:
+        except PLUGIN_ERRORS:
             info.error = traceback.format_exc()
+            log.error("Plugin %s failed to stop\n%s", info.id, info.error)
         info.api._teardown()
         info.api = None
         info.active = False
@@ -261,8 +288,9 @@ class PluginManager:
                     continue
                 try:
                     handler(*args)
-                except Exception:
+                except PLUGIN_ERRORS:
                     info.error = traceback.format_exc()
+                    log.error("Plugin %s failed on %s\n%s", info.id, event, info.error)
                     self.window.statusBar().showMessage(f"Plugin {info.name} hit an error.", 5000)
 
     def context_items(self, context):
@@ -273,6 +301,7 @@ class PluginManager:
             for provider in info.api._context_providers:
                 try:
                     items.extend(provider(context) or [])
-                except Exception:
+                except PLUGIN_ERRORS:
                     info.error = traceback.format_exc()
+                    log.error("Plugin %s failed on the page menu\n%s", info.id, info.error)
         return items

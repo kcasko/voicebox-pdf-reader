@@ -6,20 +6,28 @@ else needs to be open or installed.
 
 ## Run it
 
-Run `dist\PDFDesk.exe`. It needs nothing else installed, and you can pin it to the
-taskbar or open a PDF with it. It takes about 7 seconds to open because it unpacks
-itself each time.
+Run `dist\PDFDesk\PDFDesk.exe`. It needs nothing else installed and opens in under
+2 seconds, but it has to stay inside its folder. This is the version to distribute,
+through the installer below.
 
-`dist\PDFDesk\PDFDesk.exe` is the same app and opens in about a second, but it has to
-stay inside its folder.
+A single-file `dist\PDFDesk.exe` is also possible. It takes about 9 seconds to open
+because it unpacks 700 MB to the temp folder each time, and a crash leaves that behind.
+
+Only one window runs per user: opening another PDF sends it to the running app.
+
+If a plugin stops the app from working, start it with `PDFDesk.exe --no-plugins` and
+turn that plugin off. Errors are logged to `%APPDATA%\PDFDesk\logs\pdfdesk.log`.
 
 ## Develop
 
 ```
 python -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python -m pip install -r requirements-dev.txt
 PDFDesk.bat
 ```
+
+`requirements.lock` lists the exact versions of the last build; install from it to
+reproduce that build.
 
 ## Build
 
@@ -33,6 +41,9 @@ The voice files need to be in `plugins\read_aloud\models` first; a read from
 That builds the folder version. Set `PDFDESK_ONEFILE=1` first for the single exe.
 Check any build with `PDFDesk.exe --self-check results.txt`. It exits with 0 if the
 voices, MP3 export and OCR all work, and writes the details to the file.
+
+`installer\pdfdesk.iss` packages the folder build with Inno Setup 6, and adds PDF Desk
+to Open With for PDFs. Sign the exe and the installer before distributing them.
 
 ## What it does
 

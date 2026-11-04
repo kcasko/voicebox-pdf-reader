@@ -63,6 +63,8 @@ class PdfDocument(QObject):
         super().__init__()
         self.path = os.path.abspath(path) if path else None
         self.password = password
+        # What the open file and undo snapshots are encrypted with; `password` is what the next save uses.
+        self._open_password = password
         self.dirty = False
         self.revision = 0
         self._undo = []
@@ -72,9 +74,17 @@ class PdfDocument(QObject):
 
     def _open(self, path=None, data=None):
         doc = pymupdf.open("pdf", data) if data is not None else pymupdf.open(path)
-        if doc.needs_pass and not doc.authenticate(self.password or ""):
+        try:
+            # PyMuPDF goes by content, so an image renamed to .pdf opens too.
+            if not doc.is_pdf:
+                raise ValueError("This file isn't really a PDF.")
+            if doc.needs_pass and not doc.authenticate(self._open_password or ""):
+                raise PasswordRequired(path)
+            if doc.page_count == 0:
+                raise ValueError("This PDF has no pages.")
+        except Exception:
             doc.close()
-            raise PasswordRequired(path)
+            raise
         return doc
 
     @property
@@ -103,7 +113,7 @@ class PdfDocument(QObject):
         return tuple((pymupdf.Rect(rect) * page.rotation_matrix).normalize())
 
     def _state_bytes(self):
-        return self.doc.tobytes(garbage=0, deflate=False)
+        return self.doc.tobytes(garbage=0, deflate=False, encryption=pymupdf.PDF_ENCRYPT_KEEP)
 
     def _restore(self, data, structural=True):
         self.doc.close()
@@ -152,13 +162,16 @@ class PdfDocument(QObject):
 
     def save(self, path=None):
         target = os.path.abspath(path or self.path)
-        options = {"garbage": 3, "deflate": True}
-        if self.password:
-            options.update(
-                encryption=pymupdf.PDF_ENCRYPT_AES_256,
-                owner_pw=self.password,
-                user_pw=self.password,
-            )
+        # A protected file keeps its passwords and permissions unless the user chose a new password.
+        options = {"garbage": 3, "deflate": True, "encryption": pymupdf.PDF_ENCRYPT_KEEP}
+        if self.password != self._open_password:
+            options["encryption"] = pymupdf.PDF_ENCRYPT_NONE
+            if self.password:
+                options.update(
+                    encryption=pymupdf.PDF_ENCRYPT_AES_256,
+                    owner_pw=self.password,
+                    user_pw=self.password,
+                )
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target), suffix=".pdf.tmp")
         os.close(fd)
         try:
@@ -171,6 +184,7 @@ class PdfDocument(QObject):
             except OSError:
                 self.doc = self._open(data=backup)
                 raise
+            self._open_password = self.password
             self.doc = self._open(target)
         finally:
             if os.path.exists(tmp):

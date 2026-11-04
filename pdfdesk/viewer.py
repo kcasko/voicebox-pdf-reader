@@ -18,6 +18,7 @@ DRAG_THRESHOLD = 4
 MARKUP_TOOLS = {"highlight", "underline", "strike"}
 DRAW_TOOLS = {"note", "text", "shape", "ink"}
 SELECTION_COLOR = QColor(40, 120, 230, 80)
+SAFE_LINK_SCHEMES = {"http", "https", "mailto"}
 
 
 class PdfView(QAbstractScrollArea):
@@ -74,6 +75,10 @@ class PdfView(QAbstractScrollArea):
         self.horizontalScrollBar().setRange(0, max(0, self._canvas_width - viewport.width()))
         self.horizontalScrollBar().setPageStep(viewport.width())
         self.viewport().update()
+
+    def page_size(self, index):
+        """(width, height) of a page as shown, without loading it."""
+        return self._sizes[index]
 
     def _apply_fit(self):
         if not self._sizes or not self.fit_mode:
@@ -457,12 +462,17 @@ class PdfView(QAbstractScrollArea):
         if link.get("kind") == pymupdf.LINK_GOTO:
             self.go_to_page(link["page"], link["to"].y if link.get("to") else 0)
         elif link.get("uri"):
-            answer = QMessageBox.question(self, "Open link", f"Open this link in your browser?\n\n{link['uri']}")
-            if answer == QMessageBox.Yes:
-                from PySide6.QtCore import QUrl
-                from PySide6.QtGui import QDesktopServices
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
 
-                QDesktopServices.openUrl(QUrl(link["uri"]))
+            url = QUrl(link["uri"])
+            # Other schemes can start programs on this computer, so a PDF doesn't get to use them.
+            if url.scheme().lower() not in SAFE_LINK_SCHEMES:
+                QMessageBox.information(self, "Link blocked", f"This link isn't a web or email address, so it wasn't opened:\n\n{link['uri']}")
+                return
+            answer = QMessageBox.question(self, "Open link", f"Open this link?\n\n{link['uri']}")
+            if answer == QMessageBox.Yes:
+                QDesktopServices.openUrl(url)
 
     def _update_hover(self, pos):
         if self.tool != "select":

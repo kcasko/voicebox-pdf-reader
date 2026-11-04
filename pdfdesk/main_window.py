@@ -1,6 +1,7 @@
+import logging
 import os
 
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QPainter
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
@@ -39,6 +40,8 @@ from .settings import APP_HOME, load_json, save_json
 from .theme import theme
 from .viewer import PdfView
 
+log = logging.getLogger(__name__)
+
 PDF_FILTER = "PDF files (*.pdf)"
 MAX_RECENT = 12
 ZOOM_PRESETS = ["Fit width", "Fit page", "50%", "75%", "100%", "125%", "150%", "200%", "300%"]
@@ -54,6 +57,20 @@ ANNOTATION_TOOLS = [
     ("shape", "Box", "box"),
     ("ink", "Draw", "draw"),
 ]
+PLUGIN_TEXT_LIMITS = {"name": 60, "version": 20, "description": 500}
+
+
+def fit_rect(frame, available):
+    """Shrink and move a window rectangle until it is fully inside the available screen area."""
+    width = min(frame.width(), available.width())
+    height = min(frame.height(), available.height())
+    x = max(available.left(), min(frame.x(), available.left() + available.width() - width))
+    y = max(available.top(), min(frame.y(), available.top() + available.height() - height))
+    return QRect(x, y, width, height)
+
+
+def clip(text, limit):
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 class MainWindow(QMainWindow):
@@ -113,6 +130,24 @@ class MainWindow(QMainWindow):
             from PySide6.QtCore import QByteArray
 
             self.restoreGeometry(QByteArray.fromBase64(self.settings["geometry"].encode()))
+        self._fit_to_screen()
+        self._fitted_on_show = False
+
+    def _fit_to_screen(self):
+        if self.isMaximized() or self.isFullScreen():
+            return
+        frame = self.frameGeometry()
+        fitted = fit_rect(frame, self.screen().availableGeometry())
+        if fitted != frame:
+            self.resize(fitted.width() - (frame.width() - self.width()), fitted.height() - (frame.height() - self.height()))
+            self.move(fitted.topLeft())
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._fitted_on_show:
+            self._fitted_on_show = True
+            # The title bar's size is only known once the window is really on screen.
+            QTimer.singleShot(0, self._fit_to_screen)
 
     def _action(self, text, callback, shortcut=None, needs_document=True):
         action = QAction(text, self)
@@ -338,7 +373,14 @@ class MainWindow(QMainWindow):
         document = self._load_document(path)
         if document is None:
             return None
-        view = PdfView(document)
+        try:
+            view = PdfView(document)
+        except Exception as e:
+            # A damaged page tree can open fine and only fail once the pages are loaded.
+            log.warning("Could not lay out %s: %s", path, e)
+            document.close()
+            QMessageBox.warning(self, APP_NAME, f"Could not open {os.path.basename(path)}. The file looks damaged.\n\n{e}")
+            return None
         view.context_hook = self._on_context_menu
         view.current_page_changed.connect(self._update_page_label)
         view.zoom_changed.connect(self._update_zoom_box)
@@ -384,6 +426,7 @@ class MainWindow(QMainWindow):
         if view is None or not self._confirm_discard(view):
             return False
         self.tabs.removeTab(index)
+        self.thumbnails.forget(view.document)
         self.plugins.emit("document_closed", view.document)
         view.document.close()
         view.deleteLater()
@@ -819,13 +862,14 @@ class PluginDialog(QDialog):
         errors = []
         for row, info in enumerate(plugins):
             box = QTableWidgetItem()
-            box.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            # A plugin with a bad manifest can't be turned on; its code never runs.
+            box.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled if not info.invalid else Qt.NoItemFlags)
             box.setCheckState(Qt.Checked if info.active else Qt.Unchecked)
             box.setData(Qt.UserRole, info.id)
             self.table.setItem(row, 0, box)
-            self.table.setItem(row, 1, QTableWidgetItem(info.name))
-            self.table.setItem(row, 2, QTableWidgetItem(info.version))
-            self.table.setItem(row, 3, QTableWidgetItem(info.description))
+            self.table.setItem(row, 1, QTableWidgetItem(clip(info.name, PLUGIN_TEXT_LIMITS["name"])))
+            self.table.setItem(row, 2, QTableWidgetItem(clip(info.version, PLUGIN_TEXT_LIMITS["version"])))
+            self.table.setItem(row, 3, QTableWidgetItem(clip(info.description, PLUGIN_TEXT_LIMITS["description"])))
             if info.error:
                 errors.append(f"{info.name}: {info.error.strip().splitlines()[-1]}")
         self.table.resizeColumnsToContents()

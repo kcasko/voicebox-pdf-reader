@@ -1,4 +1,5 @@
 import os
+from collections import OrderedDict, deque
 
 import pymupdf
 from PySide6.QtCore import QRect, QRectF, QSize, Qt, QTimer, Signal
@@ -26,9 +27,13 @@ from PySide6.QtWidgets import (
 from .theme import theme
 
 THUMB_WIDTH = 132
+THUMB_MAX_HEIGHT = 400
+THUMB_MIN_SIDE = 8
 THUMB_MARGIN = 10
 THUMB_LABEL = 22
-PIXMAP_ROLE = Qt.UserRole + 1
+THUMB_CACHE = 300
+THUMB_QUEUE = 48
+SIZE_ROLE = Qt.UserRole + 1
 SEARCH_COLOR = QColor(255, 200, 0, 110)
 SEARCH_CURRENT_COLOR = QColor(255, 120, 0, 130)
 RAIL_WIDTH = 48
@@ -36,21 +41,32 @@ SIDE_WIDTH = 224
 SIDE_MAX_WIDTH = 480
 
 
+def thumb_size(page_width, page_height):
+    """Fit a page in the thumbnail box. Pages can be any shape, so both sides are limited."""
+    width, height = max(1, page_width), max(1, page_height)
+    scale = min(THUMB_WIDTH / width, THUMB_MAX_HEIGHT / height)
+    return QSize(max(THUMB_MIN_SIDE, round(width * scale)), max(THUMB_MIN_SIDE, round(height * scale)))
+
+
 class _ThumbnailDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
-        pixmap = index.data(PIXMAP_ROLE)
-        if pixmap is None:
+        size = index.data(SIZE_ROLE)
+        if size is None:
             return
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing)
-        ratio = pixmap.devicePixelRatio()
-        width, height = round(pixmap.width() / ratio), round(pixmap.height() / ratio)
+        width, height = size.width(), size.height()
         x = option.rect.x() + (option.rect.width() - width) // 2
         y = option.rect.y() + THUMB_MARGIN // 2
         frame = QRectF(x, y, width, height)
         selected = bool(option.state & QStyle.State_Selected)
         hovered = bool(option.state & QStyle.State_MouseOver)
-        painter.drawPixmap(x, y, pixmap)
+        # Only what gets painted is rendered, so asking here is what makes thumbnails lazy.
+        pixmap = self.parent().thumbnail(index.data(Qt.UserRole))
+        if pixmap is None:
+            painter.fillRect(frame, QColor(255, 255, 255))
+        else:
+            painter.drawPixmap(x, y, pixmap)
         if selected:
             painter.setPen(QPen(theme.color("accent"), 2.5))
             painter.drawRoundedRect(frame.adjusted(-2, -2, 2, 2), 3, 3)
@@ -83,7 +99,8 @@ class ThumbnailPanel(QListWidget):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setMouseTracking(True)
         self.view = None
-        self._pending = []
+        self._cache = OrderedDict()  # (document, page) -> QPixmap, kept across tab switches
+        self._pending = deque(maxlen=THUMB_QUEUE)
         self._timer = QTimer(self, interval=0, timeout=self._render_next)
         self.itemClicked.connect(self._on_clicked)
 
@@ -100,51 +117,69 @@ class ThumbnailPanel(QListWidget):
             view.current_page_changed.connect(self._on_page)
         self.rebuild()
 
-    def _thumb_size(self, index):
-        rect = self.view.document.page(index).rect
-        return QSize(THUMB_WIDTH, max(40, round(THUMB_WIDTH * rect.height / max(1, rect.width))))
-
     def rebuild(self):
         self._timer.stop()
+        self._pending.clear()
         self.clear()
         if not self.view:
             return
         for index in range(len(self.view.document)):
-            size = self._thumb_size(index)
-            placeholder = QPixmap(size)
-            placeholder.fill(QColor(255, 255, 255))
+            size = thumb_size(*self.view.page_size(index))
             item = QListWidgetItem(str(index + 1))
             item.setData(Qt.UserRole, index)
-            item.setData(PIXMAP_ROLE, placeholder)
+            item.setData(SIZE_ROLE, size)
             item.setSizeHint(QSize(THUMB_WIDTH + 16, size.height() + THUMB_LABEL + THUMB_MARGIN))
             self.addItem(item)
-        self._pending = list(range(len(self.view.document)))
-        self._timer.start()
         self._on_page(self.view.current_page)
 
+    def thumbnail(self, index):
+        """The cached image of a page, or None after queueing it to be rendered."""
+        if not self.view:
+            return None
+        key = (self.view.document, index)
+        pixmap = self._cache.get(key)
+        if pixmap is not None:
+            self._cache.move_to_end(key)
+            return pixmap
+        if index not in self._pending:
+            self._pending.append(index)
+            self._timer.start()
+        return None
+
+    def forget(self, document):
+        for key in [k for k in self._cache if k[0] is document]:
+            del self._cache[key]
+
     def _on_changed(self, structural):
+        if self.view:
+            self.forget(self.view.document)
         if structural:
             self.rebuild()
-        elif self.view and not self._timer.isActive():
+        else:
             # Annotations only change what a page looks like.
-            self._pending = [self.view.current_page]
-            self._timer.start()
+            self.viewport().update()
 
     def _render_next(self):
         if not self._pending or not self.view:
             self._timer.stop()
             return
-        index = self._pending.pop(0)
-        if index >= self.count():
+        # Newest first: those are what the user has just scrolled to.
+        index = self._pending.pop()
+        document = self.view.document
+        if index >= len(document):
             return
-        page = self.view.document.page(index)
+        page = document.page(index)
         ratio = self.devicePixelRatioF()
-        scale = THUMB_WIDTH * ratio / max(1, page.rect.width)
-        pix = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False, annots=True)
+        size = thumb_size(page.rect.width, page.rect.height)
+        matrix = pymupdf.Matrix(size.width() * ratio / max(1, page.rect.width), size.height() * ratio / max(1, page.rect.height))
+        pix = page.get_pixmap(matrix=matrix, alpha=False, annots=True)
         image = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888).copy()
         pixmap = QPixmap.fromImage(image)
         pixmap.setDevicePixelRatio(ratio)
-        self.item(index).setData(PIXMAP_ROLE, pixmap)
+        self._cache[(document, index)] = pixmap
+        while len(self._cache) > THUMB_CACHE:
+            self._cache.popitem(last=False)
+        self.viewport().update()
 
     def _on_clicked(self, item):
         if self.view:
