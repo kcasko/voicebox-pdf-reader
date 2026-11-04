@@ -7,6 +7,11 @@ It includes the components below, and each remains under its own licence. Their 
 are in `licenses\third-party`, and `requirements.lock` in the source archive gives their exact
 versions. The Source links below are where each project publishes its source code.
 
+The source of the copyleft components below, in the versions included, is published with each
+release of PDF Desk at https://github.com/kcasko/voicebox-pdf-reader/releases. `SOURCES.txt` there
+lists each archive and its hash. The FFmpeg libraries included with Qt Multimedia aren't in that
+list yet.
+
 This list was prepared from package metadata and project pages, and hasn't had a legal review.
 
 ## Strong copyleft

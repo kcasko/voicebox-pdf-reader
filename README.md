@@ -62,7 +62,9 @@ PDF Desk is free software under the GNU Affero General Public License, version 3
 
 Anyone who gets the app must be able to get its source code, so `scripts\make_source_zip.py`
 puts it in the installer. Run it before compiling the installer, and run
-`scripts\collect_licenses.py` after changing dependencies. Plugins run inside the app, so ones
+`scripts\collect_licenses.py` after changing dependencies. The bundled copyleft components need
+their source available too: `scripts\collect_third_party_source.py` downloads it into
+`dist\third-party-source`, to attach to each GitHub release alongside the installer. Plugins run inside the app, so ones
 you distribute should use a compatible licence.
 
 ## What it does
