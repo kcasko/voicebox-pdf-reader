@@ -18,7 +18,7 @@ ONEFILE = os.environ.get("PDFDESK_ONEFILE") == "1"
 
 # pdfdesk/__init__.py holds only the name and version, so this imports nothing else.
 sys.path.insert(0, SPECPATH)
-from pdfdesk import APP_NAME, __version__
+from pdfdesk import APP_NAME, COPYRIGHT, __version__
 
 numbers = tuple(int(part) for part in __version__.split(".")) + (0,)
 version_info = VSVersionInfo(
@@ -32,6 +32,7 @@ version_info = VSVersionInfo(
                         StringStruct("FileDescription", APP_NAME),
                         StringStruct("FileVersion", __version__),
                         StringStruct("InternalName", "PDFDesk"),
+                        StringStruct("LegalCopyright", COPYRIGHT),
                         StringStruct("OriginalFilename", "PDFDesk.exe"),
                         StringStruct("ProductName", APP_NAME),
                         StringStruct("ProductVersion", __version__),
@@ -47,6 +48,8 @@ datas = [
     ("plugins", "plugins"),
     ("assets/pdfdesk.ico", "assets"),
     ("THIRD_PARTY_NOTICES.md", "."),
+    ("LICENSE", "."),
+    ("licenses", "licenses"),
 ]
 binaries = []
 # Plugins load from a folder at runtime, so PyInstaller can't see what they import.

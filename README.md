@@ -55,6 +55,16 @@ Read Aloud is English only. A screen reader can use the app's controls but can't
 page itself, and PDF Desk doesn't block edits that a PDF's permissions forbid: it warns, and
 a saved copy keeps the restrictions. Very large saves and prints can pause the window.
 
+## License
+
+PDF Desk is free software under the GNU Affero General Public License, version 3 or later: see
+[LICENSE](LICENSE). Copyright (C) 2026 Keith Casko. It comes with no warranty.
+
+Anyone who gets the app must be able to get its source code, so `scripts\make_source_zip.py`
+puts it in the installer. Run it before compiling the installer, and run
+`scripts\collect_licenses.py` after changing dependencies. Plugins run inside the app, so ones
+you distribute should use a compatible licence.
+
 ## What it does
 
 - **View:** tabs, continuous scrolling, zoom, thumbnails, outline, search, links, print

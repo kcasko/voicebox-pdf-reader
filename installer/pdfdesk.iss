@@ -1,12 +1,14 @@
 ; Installs the folder build from dist\PDFDesk for the current user, and offers PDF Desk
 ; under Open With without taking over the default PDF app.
-; Build with Inno Setup 6 after PyInstaller: ISCC installer\pdfdesk.iss
+; Build with Inno Setup 6 after PyInstaller and scripts\make_source_zip.py: ISCC installer\pdfdesk.iss
 ; Keep AppVersion in step with pdfdesk\__init__.py.
 
 [Setup]
 AppId={{6F3C2A51-8E4B-4C7D-9A10-2D5B7E91C3F4}
 AppName=PDF Desk
 AppVersion=0.1.0
+AppCopyright=Copyright (C) 2026 Keith Casko
+LicenseFile=..\LICENSE
 DefaultDirName={autopf}\PDF Desk
 DefaultGroupName=PDF Desk
 DisableProgramGroupPage=yes
@@ -24,6 +26,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 
 [Files]
 Source: "..\dist\PDFDesk\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+Source: "..\dist\PDFDesk-source-0.1.0.zip"; DestDir: "{app}\source"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\PDF Desk"; Filename: "{app}\PDFDesk.exe"; AppUserModelID: "PDFDesk.PDFDesk"

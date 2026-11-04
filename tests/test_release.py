@@ -692,6 +692,37 @@ def test_self_check_doesnt_use_real_settings():
     assert "shutil.rmtree(folder" in source
 
 
+def test_the_license_is_in_place():
+    from pdfdesk.main_window import about_text
+
+    text = open(os.path.join(ROOT, "LICENSE"), encoding="utf-8").read()
+    assert text.lstrip().startswith("GNU AFFERO GENERAL PUBLIC LICENSE")
+    assert "Remote Network Interaction" in text and "END OF TERMS AND CONDITIONS" in text
+    about = about_text()
+    assert "Affero" in about and "NO WARRANTY" in about and "source" in about
+    script = open(os.path.join(ROOT, "installer", "pdfdesk.iss"), encoding="utf-8").read()
+    assert "LicenseFile=..\\LICENSE" in script and "PDFDesk-source-" in script
+    spec = open(os.path.join(ROOT, "PDFDesk.spec"), encoding="utf-8").read()
+    assert '("LICENSE", ".")' in spec and '("licenses", "licenses")' in spec
+
+
+def test_version_in_the_installer_matches_the_app():
+    from pdfdesk import __version__
+
+    script = open(os.path.join(ROOT, "installer", "pdfdesk.iss"), encoding="utf-8").read()
+    assert f"AppVersion={__version__}\n" in script.replace("\r\n", "\n")
+    assert f"PDFDesk-source-{__version__}.zip" in script
+
+
+def test_license_menu_opens_a_readable_copy(window, monkeypatch):
+    opened = []
+    monkeypatch.setattr("pdfdesk.main_window.QDesktopServices.openUrl", staticmethod(lambda url: opened.append(url.toLocalFile())))
+    win = window()
+    win._show_file("LICENSE")
+    assert opened[0].endswith("LICENSE.txt") and os.path.exists(opened[0])
+    assert "AFFERO" in open(opened[0], encoding="utf-8").read()
+
+
 def test_third_party_notices_cover_the_copyleft_parts():
     text = open(os.path.join(ROOT, "THIRD_PARTY_NOTICES.md"), encoding="utf-8").read()
     for name in ("PyMuPDF", "phonemizer", "espeak-ng", "PySide6", "Kokoro", "lameenc", "Tesseract", "ONNX Runtime"):

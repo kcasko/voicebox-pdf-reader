@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 
 from PySide6.QtCore import QFileSystemWatcher, QRect, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QImage, QKeySequence, QPainter
@@ -32,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import APP_NAME, __version__, tools
+from . import APP_NAME, COPYRIGHT, LICENSE_NAME, __version__, tools
 from .document import PasswordRequired, PdfDocument
 from .panels import SIDE_WIDTH, OutlinePanel, SearchPanel, SidePanel, ThumbnailPanel, WelcomePage
 from .plugins import ContextInfo, PluginManager
@@ -71,6 +72,18 @@ def fit_rect(frame, available):
     x = max(available.left(), min(frame.x(), available.left() + available.width() - width))
     y = max(available.top(), min(frame.y(), available.top() + available.height() - height))
     return QRect(x, y, width, height)
+
+
+def about_text():
+    return (
+        f"{APP_NAME} {__version__}\n"
+        "Listen to your PDFs, with natural voices that run on your computer.\n\n"
+        f"{COPYRIGHT}\n\n"
+        f"This program is free software, under the {LICENSE_NAME}. You can share and change it under those terms. "
+        "It comes with ABSOLUTELY NO WARRANTY. See Help > License.\n\n"
+        "The source code is in the source folder where the app is installed. "
+        "See Help > Third-Party Notices for the other software included."
+    )
 
 
 def open_failure_reason(path, error):
@@ -350,7 +363,8 @@ class MainWindow(QMainWindow):
 
         menu = bar.addMenu("&Help")
         menu.addAction(self._action("Open Log Folder", self._open_logs, needs_document=False))
-        menu.addAction(self._action("Third-Party Notices", self._show_notices, needs_document=False))
+        menu.addAction(self._action("License", lambda: self._show_file("LICENSE"), needs_document=False))
+        menu.addAction(self._action("Third-Party Notices", lambda: self._show_file(NOTICES_FILE), needs_document=False))
         menu.addAction(self._action(f"About {APP_NAME}", self._about, needs_document=False))
 
     def _document_action_on(self, menu, text, callback, shortcut=None):
@@ -384,12 +398,18 @@ class MainWindow(QMainWindow):
         else:
             self.showFullScreen()
 
-    def _show_notices(self):
-        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), NOTICES_FILE)
-        if os.path.exists(path):
-            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
-        else:
-            QMessageBox.information(self, APP_NAME, f"{NOTICES_FILE} is missing from this copy of the app.")
+    def _show_file(self, name):
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), name)
+        if not os.path.exists(path):
+            QMessageBox.information(self, APP_NAME, f"{name} is missing from this copy of the app.")
+            return
+        # A file with no extension, or one Windows has no app for, wouldn't open by itself.
+        if os.path.splitext(path)[1] != ".txt":
+            copy = os.path.join(self.home, "documents", name + ".txt")
+            os.makedirs(os.path.dirname(copy), exist_ok=True)
+            shutil.copyfile(path, copy)
+            path = copy
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def _open_logs(self):
         folder = os.path.join(self.home, "logs")
@@ -971,7 +991,7 @@ class MainWindow(QMainWindow):
         PluginDialog(self.plugins, self).exec()
 
     def _about(self):
-        QMessageBox.about(self, APP_NAME, f"{APP_NAME} {__version__}\n\nA PDF reader and editor with plugins.")
+        QMessageBox.about(self, APP_NAME, about_text())
 
 
 class MergeDialog(QDialog):

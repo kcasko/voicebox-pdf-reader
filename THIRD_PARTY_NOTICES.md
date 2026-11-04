@@ -1,14 +1,17 @@
 # Third-party notices
 
-PDF Desk includes the components below. Each remains under its own licence.
+PDF Desk is licensed under the GNU Affero General Public License, version 3 or later: see
+`LICENSE`. Its own source code is in the `source` folder of an installed copy.
 
-**Draft:** this list was prepared from package metadata and project pages, and it hasn't had a
-legal review. Licence texts and source code offers still have to be added before public release.
-`scripts\list_licenses.py` lists what a build's Python environment contains.
+It includes the components below, and each remains under its own licence. Their licence files
+are in `licenses\third-party`, and `requirements.lock` in the source archive gives their exact
+versions. The Source links below are where each project publishes its source code.
+
+This list was prepared from package metadata and project pages, and hasn't had a legal review.
 
 ## Strong copyleft
 
-These set the terms for the app as a whole unless they are replaced or separately licensed.
+PDF Desk uses these under the licences shown, which is why the app as a whole is under the AGPL.
 
 | Component | Used for | Licence | Source |
 |---|---|---|---|
@@ -18,7 +21,7 @@ These set the terms for the app as a whole unless they are replaced or separatel
 
 ## Weak copyleft
 
-These must stay replaceable by the user, which the folder and installer builds allow.
+You may replace these with your own builds: they are separate files in the app's `_internal` folder.
 
 | Component | Used for | Licence | Source |
 |---|---|---|---|
@@ -33,6 +36,7 @@ These must stay replaceable by the user, which the folder and installer builds a
 | Kokoro-82M model weights | The voices | Apache-2.0 | https://huggingface.co/hexgrad/Kokoro-82M |
 | kokoro-onnx | Running the voices | MIT | https://github.com/thewh1teagle/kokoro-onnx |
 | ONNX Runtime | Running the voices | MIT | https://github.com/microsoft/onnxruntime |
+| FlatBuffers | Used by ONNX Runtime | Apache-2.0 | https://github.com/google/flatbuffers |
 | NumPy | Audio data | BSD-3-Clause | https://github.com/numpy/numpy |
 | Tesseract language data (`eng.traineddata`) | OCR | Apache-2.0 | https://github.com/tesseract-ocr/tessdata |
 | Python | Runtime | PSF-2.0 | https://www.python.org |
