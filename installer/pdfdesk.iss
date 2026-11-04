@@ -14,6 +14,7 @@ PrivilegesRequired=lowest
 OutputDir=..\dist\installer
 OutputBaseFilename=PDFDesk-Setup-0.1.0
 SetupIconFile=..\assets\pdfdesk.ico
+UninstallDisplayName=PDF Desk
 UninstallDisplayIcon={app}\PDFDesk.exe
 Compression=lzma2
 SolidCompression=yes
