@@ -1,0 +1,6 @@
+PySide6-Addons>=6.8
+PyMuPDF>=1.26
+kokoro-onnx>=0.6
+imageio-ffmpeg>=0.8
+pytest>=8
+pyinstaller>=6

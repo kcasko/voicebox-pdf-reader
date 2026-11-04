@@ -1,0 +1,10 @@
+.venv/
+build/
+dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+
+# Voice model files: downloaded on first read, or copied in before building.
+plugins/read_aloud/models/

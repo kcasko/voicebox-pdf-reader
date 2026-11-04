@@ -1,0 +1,6 @@
+{
+  "id": "ocr",
+  "name": "OCR",
+  "version": "2.0",
+  "description": "Makes scanned English PDFs searchable and readable aloud. Everything it needs is built in."
+}

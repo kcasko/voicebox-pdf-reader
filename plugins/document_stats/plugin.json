@@ -1,0 +1,6 @@
+{
+  "id": "document_stats",
+  "name": "Document Stats",
+  "version": "1.0",
+  "description": "Example plugin: shows word count and estimated reading time. Copy this folder to start your own."
+}

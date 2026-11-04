@@ -1,0 +1,6 @@
+{
+  "id": "read_aloud",
+  "name": "Read Aloud",
+  "version": "2.0",
+  "description": "Reads PDFs out loud with natural built-in Kokoro voices, highlighting each sentence as it goes."
+}
