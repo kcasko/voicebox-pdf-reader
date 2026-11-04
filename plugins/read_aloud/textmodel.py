@@ -5,6 +5,8 @@ import statistics
 from collections import Counter
 from dataclasses import dataclass, field
 
+import pymupdf
+
 from pdfdesk.document import PdfDocument
 
 MAX_CHARS = 400
@@ -17,6 +19,11 @@ HEADING_MAX_CHARS = 120
 FOOTNOTE_SIZE_RATIO = 0.85
 FOOTNOTE_ZONE = 0.7
 BULLETS = set("•▪◦■●‣⁃·")
+TABLE_CELL_GAP = 12
+TABLE_CELL_WORDS = 6
+ROW_TOLERANCE = 2
+# Words that keep their hyphen when a line break falls after them: "self-service", not "selfservice".
+COMPOUND_PREFIXES = {"self", "well", "non", "co", "cross", "long", "short", "high", "low", "full", "part", "semi", "anti", "multi", "open", "real", "time"}
 ABBREVIATIONS = {
     "mr.", "mrs.", "ms.", "dr.", "prof.", "sr.", "jr.", "st.", "vs.", "etc.", "e.g.", "i.e.",
     "fig.", "figs.", "no.", "nos.", "vol.", "pp.", "p.", "ed.", "eds.", "inc.", "ltd.", "co.",
@@ -44,6 +51,7 @@ COLUMN_MIN_LINES = 2
 COLUMN_MIN_WORDS = 4
 
 # Spoken text
+LATIN_END = 0x250
 URL = re.compile(r"\b(?:https?://|www\.)\S+", re.I)
 NUMBERED_CITATION = re.compile(r"\s*\[\s*\d+(?:\s*[,;–-]\s*\d+)*\s*\]")
 _AUTHOR_YEAR = r"[A-Z][\w'’-]+(?:\s+(?:et\s+al\.?|(?:and|&)\s+[A-Z][\w'’-]+))?,?\s+(?:19|20)\d{2}[a-z]?(?:,\s*pp?\.\s*\d+)?"
@@ -160,7 +168,8 @@ def spoken_text(text, skip_references=False):
         text = pattern.sub(replacement, text)
     text = re.sub(r"\s+([,.;:!?])", r"\1", text)
     text = re.sub(r"\s{2,}", " ", text).strip()
-    return text if any(c.isalnum() for c in text) else ""
+    # The voices are English, so text with no Latin letters or numbers would come out as nonsense.
+    return text if any(c.isdigit() or (c.isalpha() and ord(c) < LATIN_END) for c in text) else ""
 
 
 @dataclass
@@ -330,7 +339,8 @@ def _page_styles(page):
     """Return [(bbox, all_bold, size)] for each text line, plus the page's body size and bold share."""
     styles, sizes = [], []
     bold_chars = total_chars = 0
-    for block in page.get_text("dict").get("blocks", []):
+    # Without images: on a scanned page, decoding them is most of the time spent here.
+    for block in page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT).get("blocks", []):
         for line in block.get("lines", []):
             spans = [s for s in line.get("spans", []) if s.get("text", "").strip()]
             if not spans:
@@ -376,6 +386,14 @@ def _is_footnote(line, styles, body, height):
     return style is not None and style[1] <= body * FOOTNOTE_SIZE_RATIO
 
 
+def _is_table_row(cells):
+    """Several short pieces of text side by side, spaced well apart."""
+    if len(cells) < 2 or any(len(cell.words) > TABLE_CELL_WORDS for cell in cells):
+        return False
+    ordered = sorted(cells, key=lambda cell: cell.x0)
+    return all(right.x0 - left.x1 >= TABLE_CELL_GAP for left, right in zip(ordered, ordered[1:]))
+
+
 def _ends_sentence(text, next_text=None):
     if not SENTENCE_END.search(text):
         return False
@@ -405,15 +423,18 @@ class ChunkBuilder:
 
     def feed(self, index, first_word=0, last_word=None):
         page = self.document.page(index)
-        styles, body, bold_share = _page_styles(page)
         height = page.rect.height
         heading = []
         previous_block = None
+        row = []
         lines = [
             line
             for line in page_lines(self.document, index)
             if not (_in_margin(line, height) and (PAGE_NUMBER.match(line.text.strip()) or _furniture_key(line.text) in self.furniture))
         ]
+        if not lines:
+            return
+        styles, body, bold_share = _page_styles(page)
         for line in reading_order(lines, page.rect.width):
             if line.words[-1].index < first_word or (last_word is not None and line.words[0].index > last_word):
                 continue
@@ -434,7 +455,15 @@ class ChunkBuilder:
                 if _ends_sentence(self._tokens[-1].text):
                     self._flush()
             previous_block = block
+            if row and abs(line.y0 - row[0].y0) > ROW_TOLERANCE:
+                # Tables read one row at a time.
+                if _is_table_row(row):
+                    self._flush()
+                row = []
+            row.append(line)
             self._add_line(index, words)
+        if _is_table_row(row):
+            self._flush()
         if heading:
             self._emit_heading(index, heading)
 
@@ -470,7 +499,8 @@ class ChunkBuilder:
             return False
         previous = self._tokens[-1]
         if previous.ends_line and re.search(r"[A-Za-z]{2}-$", previous.text) and re.match(r"[a-z]{2}", text):
-            previous.text = previous.text[:-1] + text
+            keep_hyphen = previous.text[:-1].lower() in COMPOUND_PREFIXES
+            previous.text = (previous.text if keep_hyphen else previous.text[:-1]) + text
             previous.sources.append((index, word))
             previous.ends_line = False
             return True

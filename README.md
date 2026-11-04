@@ -21,7 +21,7 @@ turn that plugin off. Errors are logged to `%APPDATA%\PDFDesk\logs\pdfdesk.log`.
 ## Develop
 
 ```
-python -m venv .venv
+py -3.13 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements-dev.txt
 PDFDesk.bat
 ```
@@ -43,7 +43,17 @@ Check any build with `PDFDesk.exe --self-check results.txt`. It exits with 0 if 
 voices, MP3 export and OCR all work, and writes the details to the file.
 
 `installer\pdfdesk.iss` packages the folder build with Inno Setup 6, and adds PDF Desk
-to Open With for PDFs. Sign the exe and the installer before distributing them.
+to Open With for PDFs. Uninstalling asks before deleting settings and saved audio. Sign the
+exe and the installer before distributing them.
+
+`THIRD_PARTY_NOTICES.md` lists the bundled components and their licences. After changing
+dependencies, check it against `scripts\list_licenses.py`.
+
+## Limits
+
+Read Aloud is English only. A screen reader can use the app's controls but can't read the
+page itself, and PDF Desk doesn't block edits that a PDF's permissions forbid: it warns, and
+a saved copy keeps the restrictions. Very large saves and prints can pause the window.
 
 ## What it does
 
@@ -117,7 +127,8 @@ if its files change.
 ```
 
 The second command checks real read-aloud, MP3 export and OCR, muted, with any
-separately installed ffmpeg or Tesseract hidden from the app.
+separately installed ffmpeg or Tesseract hidden from the app. It uses a separately
+installed `ffprobe` to measure the exported MP3.
 
 To see how PDFs will be read, run `tests\reading_report.py` for the generated cases, or
 give it a folder of your own PDFs and a file to write the spoken text to:

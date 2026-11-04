@@ -4,6 +4,7 @@ Runs muted, using a temporary PDF. Exits with 0 only if every check passes.
 """
 
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -13,7 +14,6 @@ from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .main_window import MainWindow
-from .settings import APP_HOME
 
 TIMEOUT = 180
 
@@ -48,7 +48,8 @@ def run(results_path, plugin_folders):
     doc.close()
 
     app = QApplication.instance() or QApplication(sys.argv)
-    window = MainWindow(plugin_folders, home=APP_HOME)
+    # A home of its own, so the check can't touch real settings or see a plugin being turned off.
+    window = MainWindow(plugin_folders, home=os.path.join(folder, "home"))
     window.show()
     for plugin_id in ("read_aloud", "ocr", "document_stats"):
         info = window.plugins.plugins.get(plugin_id)
@@ -114,5 +115,7 @@ def run(results_path, plugin_folders):
     with open(results_path, "a", encoding="utf-8") as f:
         f.write("ALL PASSED\n" if not failures else "FAILED: " + ", ".join(failures) + "\n")
     app.processEvents()
+    window.plugins.shutdown()
+    shutil.rmtree(folder, ignore_errors=True)
     # Skips interpreter teardown so a finished check can't hang on background work.
     os._exit(1 if failures else 0)

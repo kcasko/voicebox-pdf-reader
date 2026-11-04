@@ -1,4 +1,5 @@
 import os
+import secrets
 import tempfile
 import unicodedata
 from contextlib import contextmanager
@@ -70,6 +71,8 @@ class PdfDocument(QObject):
         self._undo = []
         self._redo = []
         self._words = {}
+        self._links = {}
+        self._widgets = {}
         self.doc = self._open(path, data)
 
     def _open(self, path=None, data=None):
@@ -90,6 +93,31 @@ class PdfDocument(QObject):
     @property
     def title(self):
         return os.path.basename(self.path) if self.path else "Untitled.pdf"
+
+    @property
+    def edits_restricted(self):
+        """True if the author's permissions say the PDF shouldn't be changed."""
+        return bool(self.doc.metadata.get("encryption")) and not self.doc.permissions & pymupdf.PDF_PERM_MODIFY
+
+    def protection_options(self):
+        """Save options that carry this PDF's protection over to a copy made from it."""
+        if not self.is_protected:
+            return {}
+        # The original owner password may not be known, so the copy gets a new one that nobody has.
+        return {
+            "encryption": pymupdf.PDF_ENCRYPT_AES_256,
+            "user_pw": self.password or self._open_password or "",
+            "owner_pw": secrets.token_hex(16),
+            "permissions": self.doc.permissions,
+        }
+
+    def disk_signature(self):
+        """Size and time of the file on disk, to notice another program changing it."""
+        try:
+            info = os.stat(self.path)
+            return info.st_size, info.st_mtime_ns
+        except (OSError, TypeError):
+            return None
 
     @property
     def is_protected(self):
@@ -125,9 +153,14 @@ class PdfDocument(QObject):
         self.doc = self._open(data=data)
         self._after_change(structural)
 
+    def _forget_page_data(self):
+        self._words.clear()
+        self._links.clear()
+        self._widgets.clear()
+
     def _after_change(self, structural):
         self.revision += 1
-        self._words.clear()
+        self._forget_page_data()
         self.dirty = True
         self.changed.emit(structural)
         self.state_changed.emit()
@@ -136,10 +169,14 @@ class PdfDocument(QObject):
     def edit(self, structural=False):
         """Run a change with an undo snapshot; the document is restored if it fails."""
         snapshot = self._state_bytes()
+        was_dirty = self.dirty
         try:
             yield self.doc
         except Exception:
             self._restore(snapshot)
+            # Nothing changed in the end, so there's nothing to save.
+            self.dirty = was_dirty
+            self.state_changed.emit()
             raise
         self._undo.append(snapshot)
         self._redo.clear()
@@ -197,7 +234,7 @@ class PdfDocument(QObject):
         self.path = target
         self.dirty = False
         self.revision += 1
-        self._words.clear()
+        self._forget_page_data()
         self.changed.emit(False)
         self.state_changed.emit()
 
@@ -272,11 +309,14 @@ class PdfDocument(QObject):
                     break
 
     def widget_at(self, index, point):
-        page = self.doc[index]
+        # Asked on every mouse move, and a page can hold hundreds, so this is kept per page.
+        if index not in self._widgets:
+            page = self.doc[index]
+            self._widgets[index] = [((w.rect * page.rotation_matrix).normalize(), w.xref) for w in page.widgets() or []]
         target = pymupdf.Point(point)
-        for widget in page.widgets() or []:
-            if target in (widget.rect * page.rotation_matrix).normalize():
-                return widget.xref
+        for rect, xref in self._widgets[index]:
+            if target in rect:
+                return xref
         return None
 
     def widget_info(self, index, xref):
@@ -299,10 +339,12 @@ class PdfDocument(QObject):
                     break
 
     def link_at(self, index, point):
-        page = self.doc[index]
+        if index not in self._links:
+            page = self.doc[index]
+            self._links[index] = [(pymupdf.Rect(self.to_display(page, link["from"])), link) for link in page.get_links()]
         target = pymupdf.Point(point)
-        for link in page.get_links():
-            if target in pymupdf.Rect(self.to_display(page, link["from"])):
+        for rect, link in self._links[index]:
+            if target in rect:
                 return link
         return None
 

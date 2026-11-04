@@ -1,6 +1,7 @@
 """Colors, icons and the application stylesheet, in light and dark."""
 
 import atexit
+import ctypes
 import os
 import shutil
 import tempfile
@@ -18,7 +19,8 @@ LIGHT = {
     "border": "#E2DEDA",
     "text": "#23201E",
     "muted": "#6E6964",
-    "faint": "#A9A49E",
+    "faint": "#75706A",
+    "control_border": "#8E8983",
     "accent": "#C42C3C",
     "accent_hover": "#AA2332",
     "accent_soft": "#F9E6E8",
@@ -35,9 +37,10 @@ DARK = {
     "border": "#343230",
     "text": "#EEECE9",
     "muted": "#A5A09A",
-    "faint": "#6C6863",
-    "accent": "#E8596A",
-    "accent_hover": "#F07483",
+    "faint": "#99948E",
+    "control_border": "#7E7A75",
+    "accent": "#D13C4F",
+    "accent_hover": "#BE3244",
     "accent_soft": "#47252A",
     "on_accent": "#FFFFFF",
     "canvas": "#121110",
@@ -101,7 +104,7 @@ def icon_pixmap(name, color, size=ICON_SIZE, ratio=2.0):
 
 
 STYLESHEET = """
-* {{ font-family: "Segoe UI Variable Text", "Segoe UI"; font-size: 10pt; outline: 0; }}
+* {{ font-family: "Segoe UI Variable Text", "Segoe UI"; font-size: 10pt; }}
 QMainWindow, QDialog, QMessageBox {{ background: {window}; }}
 QWidget {{ color: {text}; }}
 QLabel {{ background: transparent; }}
@@ -126,15 +129,16 @@ QMenu::indicator:checked {{ image: url("{assets}/check.png"); }}
 
 QToolBar {{ background: {surface}; border: none; border-bottom: 1px solid {border}; padding: 6px 10px; spacing: 2px; }}
 QToolBar::separator {{ background: {border}; width: 1px; margin: 5px 8px; }}
-QToolButton {{ background: transparent; border: none; border-radius: 6px; padding: 6px; }}
+QToolButton {{ background: transparent; border: 2px solid transparent; border-radius: 6px; padding: 4px; }}
+QToolButton:focus {{ border-color: {focus}; }}
 QToolButton:hover {{ background: {hover}; }}
 QToolButton:pressed {{ background: {pressed}; }}
 QToolButton:checked {{ background: {accent_soft}; }}
-QToolButton#primaryAction {{ background: {accent}; color: {on_accent}; font-weight: 600; padding: 6px 12px 6px 10px; }}
+QToolButton#primaryAction {{ background: {accent}; color: {on_accent}; font-weight: 600; padding: 4px 10px 4px 8px; }}
 QToolButton#primaryAction:hover {{ background: {accent_hover}; }}
 QToolButton#playButton {{ background: {accent}; border-radius: 27px; }}
 QToolButton#playButton:hover {{ background: {accent_hover}; }}
-QToolButton#railButton {{ padding: 8px; border-radius: 8px; }}
+QToolButton#railButton {{ padding: 6px; border-radius: 8px; }}
 QWidget#rail {{ background: {surface}; border-right: 1px solid {border}; }}
 QWidget#sideStack {{ background: {surface_alt}; border-right: 1px solid {border}; }}
 
@@ -147,6 +151,7 @@ QTabBar {{ background: {window}; qproperty-drawBase: 0; }}
 QTabBar::tab {{ background: transparent; color: {muted}; padding: 8px 10px 8px 14px; margin: 5px 0 0 5px; border-top-left-radius: 8px; border-top-right-radius: 8px; min-width: 110px; max-width: 260px; }}
 QTabBar::tab:hover {{ background: {hover}; }}
 QTabBar::tab:selected {{ background: {surface}; color: {text}; font-weight: 600; }}
+QTabBar:focus {{ border-bottom: 2px solid {focus}; }}
 QTabBar::close-button {{ image: url("{assets}/close.png"); subcontrol-position: right; border-radius: 4px; padding: 2px; }}
 QTabBar::close-button:hover {{ background: {pressed}; }}
 
@@ -163,24 +168,30 @@ QPushButton {{ background: {surface}; border: 1px solid {border}; border-radius:
 QPushButton:hover {{ background: {hover}; }}
 QPushButton:pressed {{ background: {pressed}; }}
 QPushButton:disabled {{ color: {faint}; }}
+QPushButton:focus {{ border: 2px solid {focus}; padding: 6px 13px; }}
 QPushButton#primaryButton {{ background: {accent}; color: {on_accent}; border: none; font-weight: 600; padding: 9px 26px; }}
 QPushButton#primaryButton:hover {{ background: {accent_hover}; }}
+QPushButton#primaryButton:focus {{ border: 2px solid {text}; padding: 7px 24px; }}
 QPushButton#recentFile {{ background: transparent; border: none; text-align: left; padding: 8px 10px; }}
 QPushButton#recentFile:hover {{ background: {hover}; }}
+QPushButton#recentFile:focus {{ border: 2px solid {focus}; padding: 6px 8px; }}
 QDialogButtonBox QPushButton {{ min-width: 72px; }}
 
-QLineEdit, QComboBox, QSpinBox, QPlainTextEdit, QTextEdit {{ background: {surface}; border: 1px solid {border}; border-radius: 6px; padding: 5px 8px; selection-background-color: {accent}; selection-color: {on_accent}; }}
-QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus, QTextEdit:focus {{ border-color: {accent}; }}
+QLineEdit, QComboBox, QSpinBox, QPlainTextEdit, QTextEdit {{ background: {surface}; border: 1px solid {control_border}; border-radius: 6px; padding: 5px 8px; selection-background-color: {accent}; selection-color: {on_accent}; }}
+QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus, QTextEdit:focus {{ border: 2px solid {focus}; padding: 4px 7px; }}
 QComboBox:hover {{ background: {hover}; }}
 QComboBox::drop-down {{ border: none; width: 24px; }}
 QComboBox::down-arrow {{ image: url("{assets}/down.png"); width: 12px; height: 12px; }}
 QComboBox QAbstractItemView {{ background: {surface}; border: 1px solid {border}; border-radius: 6px; padding: 4px; selection-background-color: {hover}; selection-color: {text}; }}
 
 QCheckBox {{ spacing: 8px; background: transparent; }}
-QCheckBox::indicator, QTableWidget::indicator {{ width: 16px; height: 16px; border: 1px solid {faint}; border-radius: 4px; background: {surface}; }}
+QCheckBox:focus {{ color: {focus}; }}
+QCheckBox::indicator:focus {{ border: 2px solid {focus}; }}
+QCheckBox::indicator, QTableWidget::indicator {{ width: 16px; height: 16px; border: 1px solid {control_border}; border-radius: 4px; background: {surface}; }}
 QCheckBox::indicator:checked, QTableWidget::indicator:checked {{ background: {accent}; border-color: {accent}; image: url("{assets}/check-on.png"); }}
 
-QListWidget, QTreeWidget, QTableWidget {{ background: transparent; border: none; }}
+QListWidget, QTreeWidget, QTableWidget {{ background: transparent; border: 2px solid transparent; }}
+QListWidget:focus, QTreeWidget:focus, QTableWidget:focus, PdfView:focus {{ border: 2px solid {focus}; }}
 QListWidget::item, QTreeWidget::item {{ padding: 5px 6px; border-radius: 5px; }}
 QListWidget::item:hover, QTreeWidget::item:hover {{ background: {hover}; }}
 QListWidget::item:selected, QTreeWidget::item:selected {{ background: {accent_soft}; color: {text}; }}
@@ -196,12 +207,28 @@ QToolTip {{ background: {text}; color: {surface}; border: none; padding: 4px 8px
 
 QScrollBar:vertical {{ background: transparent; width: 11px; margin: 2px; }}
 QScrollBar:horizontal {{ background: transparent; height: 11px; margin: 2px; }}
-QScrollBar::handle {{ background: {faint}; border-radius: 3px; }}
+QScrollBar::handle {{ background: {control_border}; border-radius: 3px; }}
 QScrollBar::handle:hover {{ background: {muted}; }}
 QScrollBar::handle:vertical {{ min-height: 32px; }}
 QScrollBar::handle:horizontal {{ min-width: 32px; }}
 QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; border: none; width: 0; height: 0; }}
 """
+
+
+def high_contrast_enabled():
+    """True if a Windows contrast theme is on."""
+    if not hasattr(ctypes, "windll"):
+        return False
+
+    class HighContrast(ctypes.Structure):
+        _fields_ = [("size", ctypes.c_uint), ("flags", ctypes.c_uint), ("scheme", ctypes.c_wchar_p)]
+
+    SPI_GETHIGHCONTRAST = 0x42
+    HCF_HIGHCONTRASTON = 1
+    info = HighContrast(ctypes.sizeof(HighContrast), 0, None)
+    if not ctypes.windll.user32.SystemParametersInfoW(SPI_GETHIGHCONTRAST, info.size, ctypes.byref(info), 0):
+        return False
+    return bool(info.flags & HCF_HIGHCONTRASTON)
 
 
 class Theme(QObject):
@@ -214,6 +241,7 @@ class Theme(QObject):
         self._bindings = []
         self._assets = None
         self._app = None
+        self.high_contrast = False
 
     @property
     def is_dark(self):
@@ -239,8 +267,15 @@ class Theme(QObject):
         self._write_assets()
         font = QFont("Segoe UI Variable Text", 10)
         app.setFont(font)
-        app.setPalette(self._palette())
-        app.setStyleSheet(STYLESHEET.format(assets=self._assets.replace("\\", "/"), **self.colors))
+        self.high_contrast = high_contrast_enabled()
+        if self.high_contrast:
+            # Someone who chose these colors needs them, so the app's own look stands aside.
+            app.setPalette(app.style().standardPalette())
+            app.setStyleSheet("")
+        else:
+            app.setPalette(self._palette())
+            focus = self.colors["text"] if self.is_dark else self.colors["accent"]
+            app.setStyleSheet(STYLESHEET.format(assets=self._assets.replace("\\", "/"), focus=focus, **self.colors))
         for binding in list(self._bindings):
             if not self._apply_binding(*binding):
                 self._bindings.remove(binding)

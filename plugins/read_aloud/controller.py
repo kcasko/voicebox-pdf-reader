@@ -18,6 +18,8 @@ BUILD_AHEAD = 40
 HEADING_PAUSE_MS = 350
 FOLLOW_QUIET_SECONDS = 8
 RESUME_PAGE_DISTANCE = 1
+EMPTY_PAGES_BEFORE_HINT = 5
+NO_TEXT_HINT = "No readable text here. For a scanned PDF, run Tools > Make Searchable (OCR) first."
 HIGHLIGHT = QColor(255, 214, 90, 110)
 OVERLAY = "read-aloud"
 PRIVATE_PREFIX = "private-"
@@ -46,7 +48,8 @@ class ReadAloudController(QObject):
         self.voice_name = api.settings.get("voice", "Emma")
         if self.voice_name not in VOICES:
             self.voice_name = "Emma"
-        self.speed = float(api.settings.get("speed", 1.0))
+        speed = api.settings.get("speed", 1.0)
+        self.speed = float(speed) if isinstance(speed, (int, float)) and 0.25 <= speed <= 4 else 1.0
         self.follow = bool(api.settings.get("follow", True))
         self.skip_references = bool(api.settings.get("skip_references", True))
         self._partial = False
@@ -277,6 +280,9 @@ class ReadAloudController(QObject):
         self.api.save_settings()
         if self.state in ("playing", "waiting"):
             self._move_to(self.index)
+        elif self.state == "paused":
+            # Resuming must not carry on in the old voice.
+            self.player.stop()
 
     def set_speed(self, speed):
         self.speed = speed
@@ -336,6 +342,9 @@ class ReadAloudController(QObject):
         self._builder.feed(self._next_page)
         self.chunks = self._builder.chunks
         self._next_page += 1
+        if not self.chunks and self._seek is not None and self._next_page - self._seek[0] == EMPTY_PAGES_BEFORE_HINT:
+            # Keep looking, but don't leave someone waiting in silence on a long scanned PDF.
+            self.message.emit(NO_TEXT_HINT)
         self._after_build()
 
     def _after_build(self):
@@ -349,7 +358,7 @@ class ReadAloudController(QObject):
                     found = len(self.chunks) - 1
                 else:
                     self._set_state("idle")
-                    self.message.emit("No readable text here. For a scanned PDF, run Tools > Make Searchable (OCR) first.")
+                    self.message.emit(NO_TEXT_HINT)
                     return
             self.index = found
             self._pump()
@@ -467,8 +476,9 @@ class ReadAloudController(QObject):
     # Saved position, kept per PDF
     def _saved_position(self, document):
         key = position_key(document)
-        saved = self.api.settings.get("positions", {}).get(key) if key else None
-        if saved and saved[0] < len(document):
+        positions = self.api.settings.get("positions")
+        saved = positions.get(key) if key and isinstance(positions, dict) else None
+        if isinstance(saved, list) and len(saved) == 2 and all(isinstance(n, int) for n in saved) and 0 <= saved[0] < len(document):
             return saved
         return None
 
@@ -477,7 +487,9 @@ class ReadAloudController(QObject):
         key = position_key(self.document) if self.document else None
         if key and not self._selection_only and not self._partial and self.index < len(self.chunks):
             chunk = self.chunks[self.index]
-            self.api.settings.setdefault("positions", {})[key] = [chunk.page, chunk.word]
+            if not isinstance(self.api.settings.get("positions"), dict):
+                self.api.settings["positions"] = {}
+            self.api.settings["positions"][key] = [chunk.page, chunk.word]
             self.api.save_settings()
             return True
         return False

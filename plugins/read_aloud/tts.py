@@ -136,8 +136,10 @@ def write_wav(samples, rate, path):
         out.writeframes((scaled * 32767).astype(numpy.int16).tobytes())
 
 
-def audio_path(cache_dir, voice_id, text):
-    key = hashlib.sha1(f"{voice_id}|{text}".encode("utf-8")).hexdigest()
+def audio_path(cache_dir, voice_id, text, speed=1.0):
+    # Playback changes speed by itself, so only export makes audio at another speed.
+    label = f"{voice_id}|{text}" if speed == 1.0 else f"{voice_id}|{speed}|{text}"
+    key = hashlib.sha1(label.encode("utf-8")).hexdigest()
     return os.path.join(cache_dir, key + ".wav")
 
 
@@ -164,12 +166,13 @@ def prune_cache(cache_dir, limit=CACHE_LIMIT_BYTES):
 
 
 class Job:
-    __slots__ = ("path", "voice_id", "text")
+    __slots__ = ("path", "voice_id", "text", "speed")
 
-    def __init__(self, cache_dir, voice_id, text):
-        self.path = audio_path(cache_dir, voice_id, text)
+    def __init__(self, cache_dir, voice_id, text, speed=1.0):
+        self.path = audio_path(cache_dir, voice_id, text, speed)
         self.voice_id = voice_id
         self.text = text
+        self.speed = speed
 
 
 class Synthesizer(QObject):
@@ -233,7 +236,7 @@ class Synthesizer(QObject):
             if has_audio(job.path):
                 return
             engine = _load_engine(lambda text: self._emit(self.progress, text))
-            samples, rate = engine.create(job.text, voice=job.voice_id, speed=1.0, lang=language_for(job.voice_id))
+            samples, rate = engine.create(job.text, voice=job.voice_id, speed=job.speed, lang=language_for(job.voice_id))
             partial = job.path + ".part"
             write_wav(samples, rate, partial)
             os.replace(partial, job.path)

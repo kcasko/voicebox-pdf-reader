@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .settings import may_exist
 from .theme import theme
 
 THUMB_WIDTH = 132
@@ -37,6 +38,8 @@ SIZE_ROLE = Qt.UserRole + 1
 SEARCH_COLOR = QColor(255, 200, 0, 110)
 SEARCH_CURRENT_COLOR = QColor(255, 120, 0, 130)
 RAIL_WIDTH = 48
+MAX_SEARCH_RESULTS = 2000
+SNIPPET_WORDS = 7
 SIDE_WIDTH = 224
 SIDE_MAX_WIDTH = 480
 
@@ -91,6 +94,7 @@ class ThumbnailPanel(QListWidget):
     def __init__(self):
         super().__init__()
         self.setObjectName("thumbnails")
+        self.setAccessibleName("Page thumbnails")
         self.setItemDelegate(_ThumbnailDelegate(self))
         self.setSpacing(2)
         self.setDragDropMode(QAbstractItemView.InternalMove)
@@ -103,6 +107,7 @@ class ThumbnailPanel(QListWidget):
         self._pending = deque(maxlen=THUMB_QUEUE)
         self._timer = QTimer(self, interval=0, timeout=self._render_next)
         self.itemClicked.connect(self._on_clicked)
+        self.itemActivated.connect(self._on_clicked)
 
     def set_view(self, view):
         if self.view is not None:
@@ -128,6 +133,7 @@ class ThumbnailPanel(QListWidget):
             item = QListWidgetItem(str(index + 1))
             item.setData(Qt.UserRole, index)
             item.setData(SIZE_ROLE, size)
+            item.setData(Qt.AccessibleTextRole, f"Page {index + 1}")
             item.setSizeHint(QSize(THUMB_WIDTH + 16, size.height() + THUMB_LABEL + THUMB_MARGIN))
             self.addItem(item)
         self._on_page(self.view.current_page)
@@ -208,8 +214,10 @@ class OutlinePanel(QTreeWidget):
         super().__init__()
         self.setHeaderHidden(True)
         self.setIndentation(14)
+        self.setAccessibleName("Document outline")
         self.view = None
         self.itemClicked.connect(self._on_clicked)
+        self.itemActivated.connect(self._on_clicked)
 
     def set_view(self, view):
         if self.view is not None:
@@ -256,14 +264,14 @@ class SearchPanel(QWidget):
     def __init__(self):
         super().__init__()
         self.view = None
-        self.input = QLineEdit(placeholderText="Find in document")
+        self.input = QLineEdit(placeholderText="Find in document", accessibleName="Find in document")
         self.input.setClearButtonEnabled(True)
         self.case_box = QCheckBox("Match case")
-        self.results = QListWidget()
+        self.results = QListWidget(accessibleName="Search results")
         self.results.setWordWrap(True)
-        self.status = QLabel("", objectName="panelStatus")
-        previous = QToolButton(toolTip="Previous match")
-        following = QToolButton(toolTip="Next match")
+        self.status = QLabel("", objectName="panelStatus", textFormat=Qt.PlainText)
+        previous = QToolButton(toolTip="Previous match", accessibleName="Previous match")
+        following = QToolButton(toolTip="Next match", accessibleName="Next match")
         theme.bind(previous, "up", "muted")
         theme.bind(following, "down", "muted")
         self.results.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -291,9 +299,24 @@ class SearchPanel(QWidget):
 
     def set_view(self, view):
         if self.view:
-            self.view.set_overlay("search", None)
+            self._clear_overlays()
+            try:
+                self.view.document.changed.disconnect(self._on_document_changed)
+            except RuntimeError:
+                pass
         self.view = view
+        if view:
+            view.document.changed.connect(self._on_document_changed)
         self.start()
+
+    def _clear_overlays(self):
+        self.view.set_overlay("search", None)
+        self.view.set_overlay("search-current", None)
+
+    def _on_document_changed(self, structural):
+        # Page numbers in the results no longer mean anything.
+        if structural and self._query.strip():
+            self.start()
 
     def focus(self):
         self.input.setFocus()
@@ -313,34 +336,49 @@ class SearchPanel(QWidget):
         self._query = self.input.text()
         self.status.setText("")
         if self.view:
-            self.view.set_overlay("search", None)
+            self._clear_overlays()
         if self.view and self._query.strip():
             self._timer.start()
 
     def _search_next(self):
         document = self.view.document if self.view else None
-        if document is None or self._next_page >= len(document):
+        if document is None or self._next_page >= len(document) or len(self._matches) >= MAX_SEARCH_RESULTS:
             self._timer.stop()
-            self.status.setText(f"{len(self._matches)} matches" if self._matches else "No matches")
+            if len(self._matches) >= MAX_SEARCH_RESULTS:
+                self.status.setText(f"First {len(self._matches)} matches. Try a longer search.")
+            else:
+                self.status.setText(f"{len(self._matches)} matches" if self._matches else "No matches")
             self._apply_overlay()
             return
         index = self._next_page
         self._next_page += 1
         page = document.page(index)
         rects = page.search_for(self._query, flags=pymupdf.TEXT_DEHYPHENATE)
+        words = page.get_text("words") if rects else []
         if self.case_box.isChecked():
-            rects = [r for r in rects if self._query in page.get_textbox(r + (-1, -1, 1, 1))]
+            rects = [r for r in rects if self._matches_case(words, r)]
         for rect in rects:
             self._matches.append((index, document.to_display(page, rect)))
-            snippet = page.get_textbox(rect + (-90, -1, 90, 1)).replace("\n", " ").strip()
-            # The box cuts words off at both ends, so drop those when the match survives.
-            trimmed = " ".join(snippet.split()[1:-1])
-            if self._query.lower() in trimmed.lower():
-                snippet = trimmed
-            self.results.addItem(f"Page {index + 1}: {snippet}")
-        self.status.setText(f"Searching... {len(self._matches)}")
+            self.results.addItem(f"Page {index + 1}: {self._snippet(words, rect)}")
+        self.status.setText(f"Searching page {index + 1} of {len(document)}... {len(self._matches)} matches")
         if rects and len(self._matches) == len(rects):
             self.results.setCurrentRow(0)
+
+    @staticmethod
+    def _words_at(words, rect):
+        return [i for i, word in enumerate(words) if pymupdf.Rect(word[:4]).intersects(rect)]
+
+    def _matches_case(self, words, rect):
+        found = " ".join(words[i][4] for i in self._words_at(words, rect))
+        # A match running onto the next line comes back one piece at a time.
+        return self._query in found or found in self._query
+
+    def _snippet(self, words, rect):
+        hits = self._words_at(words, rect)
+        if not hits:
+            return self._query
+        first, last = max(0, hits[0] - SNIPPET_WORDS), hits[-1] + SNIPPET_WORDS + 1
+        return " ".join(word[4] for word in words[first:last])
 
     def _apply_overlay(self):
         if not self.view:
@@ -394,7 +432,7 @@ class SidePanel(QWidget):
         page_layout.addWidget(QLabel(title, objectName="panelTitle"))
         page_layout.addWidget(widget, 1)
         self.stack.addWidget(page)
-        button = QToolButton(objectName="railButton", toolTip=title, checkable=True)
+        button = QToolButton(objectName="railButton", toolTip=title, checkable=True, accessibleName=title)
         button.setIconSize(QSize(20, 20))
         theme.bind(button, icon, "muted")
         button.clicked.connect(lambda _c=False, k=key: self._on_button(k))
@@ -491,7 +529,7 @@ class WelcomePage(QWidget):
         self._recent = []
 
     def set_recent(self, paths):
-        self._recent = [p for p in paths if os.path.exists(p)][:5]
+        self._recent = [p for p in paths if may_exist(p)][:5]
         self._restyle_recent()
 
     def _restyle_recent(self):

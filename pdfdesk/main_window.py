@@ -1,8 +1,8 @@
 import logging
 import os
 
-from PySide6.QtCore import QRect, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence, QPainter
+from PySide6.QtCore import QFileSystemWatcher, QRect, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QImage, QKeySequence, QPainter
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -36,7 +36,7 @@ from . import APP_NAME, __version__, tools
 from .document import PasswordRequired, PdfDocument
 from .panels import SIDE_WIDTH, OutlinePanel, SearchPanel, SidePanel, ThumbnailPanel, WelcomePage
 from .plugins import ContextInfo, PluginManager
-from .settings import APP_HOME, load_json, save_json
+from .settings import APP_HOME, clean_settings, load_json, may_exist, save_json
 from .theme import theme
 from .viewer import PdfView
 
@@ -45,6 +45,9 @@ log = logging.getLogger(__name__)
 PDF_FILTER = "PDF files (*.pdf)"
 MAX_RECENT = 12
 MAX_REMEMBERED_VIEWS = 200
+FILE_CHECK_DELAY_MS = 500
+PAGE_LIST_LIMIT = 10
+NOTICES_FILE = "THIRD_PARTY_NOTICES.md"
 ZOOM_PRESETS = ["Fit width", "Fit page", "50%", "75%", "100%", "125%", "150%", "200%", "300%"]
 LOGO_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "pdfdesk.ico")
 ANNOTATION_TOOLS = [
@@ -70,6 +73,16 @@ def fit_rect(frame, available):
     return QRect(x, y, width, height)
 
 
+def page_list(pages):
+    """Name pages exactly, so nobody deletes ones they weren't looking at."""
+    numbers = [str(page + 1) for page in pages]
+    if len(numbers) == 1:
+        return f"page {numbers[0]}"
+    shown = ", ".join(numbers[:PAGE_LIST_LIMIT])
+    more = f" and {len(numbers) - PAGE_LIST_LIMIT} more" if len(numbers) > PAGE_LIST_LIMIT else ""
+    return f"{len(numbers)} pages ({shown}{more})"
+
+
 def clip(text, limit):
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
@@ -79,7 +92,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.home = home
         self.settings_path = os.path.join(home, "settings.json")
-        self.settings = load_json(self.settings_path)
+        self.settings = clean_settings(load_json(self.settings_path))
+        self._watcher = QFileSystemWatcher(self)
+        self._watcher.fileChanged.connect(self._on_file_changed)
+        self._checking_disk = set()
         theme.apply(QApplication.instance(), self.settings.get("theme", "system"))
         self.resize(1360, 880)
         self.setAcceptDrops(True)
@@ -220,7 +236,7 @@ class MainWindow(QMainWindow):
         self.main_toolbar = main
 
     def _status_button(self, tip, icon, callback):
-        button = QToolButton(toolTip=tip)
+        button = QToolButton(toolTip=tip, accessibleName=tip)
         button.setIconSize(QSize(15, 15))
         theme.bind(button, icon, "muted")
         button.clicked.connect(lambda _c=False: callback())
@@ -230,10 +246,12 @@ class MainWindow(QMainWindow):
         bar = self.statusBar()
         bar.setSizeGripEnabled(False)
         bar.setContentsMargins(6, 0, 6, 0)
-        self.page_input = QLineEdit(maximumWidth=44, alignment=Qt.AlignCenter)
+        self.page_input = QLineEdit(maximumWidth=44, alignment=Qt.AlignCenter, accessibleName="Page number")
         self.page_input.returnPressed.connect(self._on_page_input)
         self.page_total = QLabel(" / 0 ")
-        self.zoom_box = QComboBox(editable=True, minimumWidth=108)
+        self.zoom_box = QComboBox(editable=True, minimumWidth=108, accessibleName="Zoom")
+        self.zoom_box.setInsertPolicy(QComboBox.NoInsert)
+        self.zoom_box.lineEdit().setAccessibleName("Zoom")
         self.zoom_box.addItems(ZOOM_PRESETS)
         self.zoom_box.activated.connect(lambda _i: self._on_zoom_box())
         self.zoom_box.lineEdit().returnPressed.connect(self._on_zoom_box)
@@ -286,6 +304,11 @@ class MainWindow(QMainWindow):
             self.theme_group.addAction(action)
             theme_menu.addAction(action)
 
+        # The toolbar can't be reached from the keyboard, so the tools are here too.
+        menu = bar.addMenu("&Mark Up")
+        for action in self.tool_actions.values():
+            menu.addAction(action)
+
         menu = bar.addMenu("&Pages")
         d = self._document_action_on
         d(menu, "Rotate Right", lambda: self._rotate(90), "Ctrl+R")
@@ -315,6 +338,7 @@ class MainWindow(QMainWindow):
 
         menu = bar.addMenu("&Help")
         menu.addAction(self._action("Open Log Folder", self._open_logs, needs_document=False))
+        menu.addAction(self._action("Third-Party Notices", self._show_notices, needs_document=False))
         menu.addAction(self._action(f"About {APP_NAME}", self._about, needs_document=False))
 
     def _document_action_on(self, menu, text, callback, shortcut=None):
@@ -347,6 +371,13 @@ class MainWindow(QMainWindow):
             self.showNormal()
         else:
             self.showFullScreen()
+
+    def _show_notices(self):
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), NOTICES_FILE)
+        if os.path.exists(path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        else:
+            QMessageBox.information(self, APP_NAME, f"{NOTICES_FILE} is missing from this copy of the app.")
 
     def _open_logs(self):
         folder = os.path.join(self.home, "logs")
@@ -402,12 +433,54 @@ class MainWindow(QMainWindow):
         view.tool_finished.connect(self._sync_tool_actions)
         document.state_changed.connect(self._on_document_state)
         document.changed.connect(lambda structural, d=document: self.plugins.emit("document_changed", d, structural))
+        if document.edits_restricted:
+            document.changed.connect(self._warn_restricted, Qt.SingleShotConnection)
+            self.statusBar().showMessage("The author of this PDF restricted changes to it.", 8000)
+        self._watch(document)
         self.tabs.addTab(view, document.title)
         self.tabs.setCurrentWidget(view)
         self._restore_view(view)
         self._add_recent(path)
         self.plugins.emit("document_opened", document)
         return view
+
+    def _warn_restricted(self, _structural=False):
+        QMessageBox.information(
+            self,
+            "Restricted PDF",
+            "The author of this PDF restricted changes to it. PDF Desk doesn't block them, and a saved copy keeps "
+            "the restrictions, but please check that you're allowed to edit it. You can undo this change.",
+        )
+
+    def _watch(self, document):
+        document.known_signature = document.disk_signature()
+        if document.path:
+            self._watcher.addPath(document.path)
+
+    def _on_file_changed(self, path):
+        # Programs often write a file in several steps, so wait for it to settle.
+        QTimer.singleShot(FILE_CHECK_DELAY_MS, lambda p=path: self._check_disk(p))
+
+    def _check_disk(self, path):
+        view = next((v for v in self.views() if v.document.path and os.path.normcase(v.document.path) == os.path.normcase(path)), None)
+        if view is None or path in self._checking_disk:
+            return
+        # Replacing a file drops it from the watcher.
+        self._watcher.addPath(path)
+        signature = view.document.disk_signature()
+        if signature is None or signature == view.document.known_signature:
+            return
+        view.document.known_signature = signature
+        self._checking_disk.add(path)
+        try:
+            unsaved = " Your unsaved changes would be lost." if view.document.dirty else ""
+            answer = QMessageBox.question(self, APP_NAME, f"{view.document.title} was changed by another program. Reload it?{unsaved}")
+        finally:
+            self._checking_disk.discard(path)
+        if answer == QMessageBox.Yes:
+            view.document.dirty = False
+            if self.close_tab(self.tabs.indexOf(view)):
+                self.open_path(path)
 
     def _restore_view(self, view):
         saved = self.settings.get("views", {}).get(os.path.normcase(view.document.path))
@@ -454,7 +527,7 @@ class MainWindow(QMainWindow):
 
     def _fill_recent(self):
         self.recent_menu.clear()
-        recent = [p for p in self.settings.get("recent", []) if os.path.exists(p)]
+        recent = [p for p in self.settings.get("recent", []) if may_exist(p)]
         if not recent:
             self.recent_menu.addAction("No recent files").setEnabled(False)
         for path in recent:
@@ -478,6 +551,8 @@ class MainWindow(QMainWindow):
         save_json(self.settings_path, self.settings)
         self.tabs.removeTab(index)
         self.thumbnails.forget(view.document)
+        if view.document.path:
+            self._watcher.removePath(view.document.path)
         self.plugins.emit("document_closed", view.document)
         view.document.close()
         view.deleteLater()
@@ -536,11 +611,15 @@ class MainWindow(QMainWindow):
         return self._save_to(view, path) if path else False
 
     def _save_to(self, view, path):
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             view.document.save(path)
         except Exception as e:
+            QApplication.restoreOverrideCursor()
             QMessageBox.warning(self, APP_NAME, f"Could not save the PDF. Is it open in another program?\n\n{e}")
             return False
+        QApplication.restoreOverrideCursor()
+        self._watch(view.document)
         self._add_recent(path)
         self.statusBar().showMessage(f"Saved {path}", 4000)
         return True
@@ -552,24 +631,46 @@ class MainWindow(QMainWindow):
         printer = QPrinter(QPrinter.HighResolution)
         if QPrintDialog(printer, self).exec() != QDialog.Accepted:
             return
-        import pymupdf
-        from PySide6.QtGui import QImage
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            failure = self._print_pages(view.document, printer)
+        except Exception as e:
+            log.exception("Printing failed")
+            failure = str(e)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if failure:
+            QMessageBox.warning(self, "Print", f"The PDF wasn't printed.\n\n{failure}")
+        else:
+            self.statusBar().showMessage("Sent to the printer.", 4000)
 
-        painter = QPainter(printer)
-        first = max(printer.fromPage() - 1, 0)
-        last = printer.toPage() - 1 if printer.toPage() else len(view.document) - 1
-        for index in range(first, min(last, len(view.document) - 1) + 1):
-            if index > first:
-                printer.newPage()
-            pix = view.document.page(index).get_pixmap(dpi=min(printer.resolution(), 300), alpha=False, annots=True)
-            image = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
-            target = painter.viewport()
-            size = image.size().scaled(target.size(), Qt.KeepAspectRatio)
-            painter.setViewport(target.x(), target.y(), size.width(), size.height())
-            painter.setWindow(image.rect())
-            painter.drawImage(0, 0, image)
-            painter.setViewport(target)
-        painter.end()
+    def _print_pages(self, document, printer):
+        """Print a range of pages. Returns what went wrong, or None."""
+        painter = QPainter()
+        if not painter.begin(printer):
+            return "The printer couldn't be started."
+        try:
+            first = max(printer.fromPage() - 1, 0)
+            last = printer.toPage() - 1 if printer.toPage() else len(document) - 1
+            for index in range(first, min(last, len(document) - 1) + 1):
+                if index > first and not printer.newPage():
+                    return "The printer stopped responding."
+                pix = document.page(index).get_pixmap(dpi=min(printer.resolution(), 300), alpha=False, annots=True)
+                image = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
+                area = painter.viewport()
+                painter.save()
+                if (image.width() > image.height()) != (area.width() > area.height()):
+                    # Turn the page to fill the sheet, as printing from other PDF apps does.
+                    painter.translate(area.width(), 0)
+                    painter.rotate(90)
+                    area = QRect(0, 0, area.height(), area.width())
+                size = image.size().scaled(area.size(), Qt.KeepAspectRatio)
+                x, y = (area.width() - size.width()) // 2, (area.height() - size.height()) // 2
+                painter.drawImage(QRect(x, y, size.width(), size.height()), image)
+                painter.restore()
+        finally:
+            painter.end()
+        return None
 
     # State
     def _on_tab_changed(self, _index):
@@ -710,8 +811,7 @@ class MainWindow(QMainWindow):
     def _delete_pages(self):
         view = self.current_view()
         pages = self._target_pages()
-        label = f"page {pages[0] + 1}" if len(pages) == 1 else f"{len(pages)} pages"
-        if QMessageBox.question(self, "Delete pages", f"Delete {label}? You can undo this until you close the file.") == QMessageBox.Yes:
+        if QMessageBox.question(self, "Delete pages", f"Delete {page_list(pages)}? You can undo this until you close the file.") == QMessageBox.Yes:
             self._guarded("Delete pages", lambda: view.document.delete_pages(pages))
 
     def _on_pages_reordered(self, order):
@@ -742,8 +842,29 @@ class MainWindow(QMainWindow):
     def _insert_pdf(self):
         view = self.current_view()
         path, _ = QFileDialog.getOpenFileName(self, "Insert PDF", "", PDF_FILTER)
-        if path:
-            self._guarded("Insert PDF", lambda: view.document.insert_file(path, view.current_page + 1))
+        if not path:
+            return
+        password = None
+        while True:
+            try:
+                view.document.insert_file(path, view.current_page + 1, password)
+                return
+            except PasswordRequired:
+                prompt = "This PDF needs a password:" if password is None else "That password didn't work. Try again:"
+                password, ok = QInputDialog.getText(self, "Insert PDF", prompt, QLineEdit.Password)
+                if not ok:
+                    return
+            except Exception as e:
+                QMessageBox.warning(self, "Insert PDF", str(e))
+                return
+
+    def _confirm_overwrite(self, paths):
+        existing = [p for p in paths if os.path.exists(p)]
+        if not existing:
+            return True
+        shown = "\n".join(os.path.basename(p) for p in existing[:PAGE_LIST_LIMIT])
+        more = f"\nand {len(existing) - PAGE_LIST_LIMIT} more" if len(existing) > PAGE_LIST_LIMIT else ""
+        return QMessageBox.question(self, APP_NAME, f"These files already exist. Replace them?\n\n{shown}{more}") == QMessageBox.Yes
 
     def _add_page_numbers(self):
         view = self.current_view()
@@ -778,14 +899,13 @@ class MainWindow(QMainWindow):
         if not folder:
             return
         stem = os.path.splitext(view.document.title)[0]
-        if text.strip().isdigit():
-            size = max(1, int(text))
-            result = self._guarded("Split", lambda: tools.split_every(view.document, size, folder, stem))
+        if text.strip().isdecimal():
+            groups = tools.every_groups(max(1, int(text)), len(view.document))
         else:
-            result = self._guarded(
-                "Split",
-                lambda: tools.split_ranges(view.document, tools.parse_ranges(text, len(view.document)), folder, stem),
-            )
+            groups = self._guarded("Split", lambda: tools.parse_ranges(text, len(view.document)))
+        if not groups or not self._confirm_overwrite(tools.split_paths(groups, folder, stem)):
+            return
+        result = self._guarded("Split", lambda: tools.split_ranges(view.document, groups, folder, stem))
         if result:
             self.statusBar().showMessage(f"Created {len(result)} PDFs in {folder}", 6000)
 
@@ -821,6 +941,8 @@ class MainWindow(QMainWindow):
         folder = QFileDialog.getExistingDirectory(self, "Save page images in")
         if folder:
             stem = os.path.splitext(view.document.title)[0]
+            if not self._confirm_overwrite(tools.image_paths(len(view.document), folder, stem)):
+                return
             result = self._guarded("Export images", lambda: tools.export_images(view.document, folder, stem))
             if result:
                 self.statusBar().showMessage(f"Saved {len(result)} images in {folder}", 6000)

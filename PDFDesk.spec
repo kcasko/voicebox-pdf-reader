@@ -46,6 +46,7 @@ version_info = VSVersionInfo(
 datas = [
     ("plugins", "plugins"),
     ("assets/pdfdesk.ico", "assets"),
+    ("THIRD_PARTY_NOTICES.md", "."),
 ]
 binaries = []
 # Plugins load from a folder at runtime, so PyInstaller can't see what they import.
@@ -53,7 +54,7 @@ hiddenimports = collect_submodules("pdfdesk") + [
     "PySide6.QtMultimedia",
     "PySide6.QtNetwork",
     "PySide6.QtSvg",
-    "imageio_ffmpeg",
+    "lameenc",
     "numpy",
     "statistics",
     "wave",
@@ -66,7 +67,6 @@ for package in (
     "segments",
     "csvw",
     "onnxruntime",
-    "imageio_ffmpeg",
 ):
     package_datas, package_binaries, package_imports = collect_all(package)
     datas += package_datas
@@ -79,7 +79,8 @@ a = Analysis(
     datas=datas,
     binaries=binaries,
     hiddenimports=hiddenimports,
-    excludes=["tkinter", "pytest", "matplotlib", "IPython"],
+    # PyMuPDF 2 brings in tools for AI text extraction, which the app doesn't use.
+    excludes=["tkinter", "pytest", "matplotlib", "IPython", "pymupdf4llm", "pymupdf_layout"],
 )
 # Python caches from development shouldn't ship.
 a.datas = [entry for entry in a.datas if "__pycache__" not in entry[0]]

@@ -36,3 +36,18 @@ Root: HKA; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: string; V
 
 [Run]
 Filename: "{app}\PDFDesk.exe"; Description: "Open PDF Desk"; Flags: nowait postinstall skipifsilent
+
+[Code]
+// Settings, saved places and saved audio live outside the app folder. They're only removed if the
+// person agrees, and a silent uninstall keeps them.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Data: String;
+begin
+  if (CurUninstallStep = usPostUninstall) and not UninstallSilent then
+  begin
+    Data := ExpandConstant('{userappdata}\PDFDesk');
+    if DirExists(Data) and (MsgBox('Also delete your PDF Desk settings, list of recent files, saved reading places and saved audio?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES) then
+      DelTree(Data, True, True, True);
+  end;
+end;

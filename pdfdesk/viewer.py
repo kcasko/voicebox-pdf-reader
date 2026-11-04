@@ -15,6 +15,7 @@ SHADOW_LAYERS = 5
 MIN_ZOOM = 0.25
 MAX_ZOOM = 6.0
 CACHE_PAGES = 24
+CACHE_BYTES = 300 * 1024 * 1024
 DRAG_THRESHOLD = 4
 MARKUP_TOOLS = {"highlight", "underline", "strike"}
 DRAW_TOOLS = {"note", "text", "shape", "ink"}
@@ -57,6 +58,7 @@ class PdfView(QAbstractScrollArea):
         self.setMouseTracking(True)
         self.viewport().setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
+        self.setAccessibleName(f"Pages of {document.title}")
         self.setFrameShape(QAbstractScrollArea.NoFrame)
         self.verticalScrollBar().valueChanged.connect(self._on_scroll)
         self.horizontalScrollBar().valueChanged.connect(lambda _v: self.viewport().update())
@@ -529,7 +531,8 @@ class PdfView(QAbstractScrollArea):
             image = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888).copy()
             image.setDevicePixelRatio(ratio)
             self._cache[key] = image
-            while len(self._cache) > CACHE_PAGES:
+            # High zoom makes each page huge, so a count alone can't limit the memory. The page on screen stays.
+            while len(self._cache) > 1 and (len(self._cache) > CACHE_PAGES or sum(i.sizeInBytes() for i in self._cache.values()) > CACHE_BYTES):
                 self._cache.popitem(last=False)
         else:
             self._cache.move_to_end(key)

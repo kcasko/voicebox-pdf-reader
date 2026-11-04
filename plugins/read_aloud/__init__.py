@@ -60,7 +60,7 @@ class ReadAloudPanel(QWidget):
         self.api = api
         self.controller = controller
 
-        self.play_button = QToolButton(objectName="playButton", toolTip="Read or pause (F5)")
+        self.play_button = QToolButton(objectName="playButton", toolTip="Read or pause (F5)", accessibleName="Read or pause")
         self.play_button.setFixedSize(54, 54)
         self.play_button.setIconSize(QSize(24, 24))
         self.play_button.setCursor(Qt.PointingHandCursor)
@@ -85,7 +85,7 @@ class ReadAloudPanel(QWidget):
         self.sentence.setMinimumHeight(84)
         self.sentence.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.sentence.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.progress = QProgressBar(textVisible=False)
+        self.progress = QProgressBar(textVisible=False, accessibleName="Reading progress")
         self.progress.setRange(0, 1000)
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(14, 12, 14, 14)
@@ -97,11 +97,11 @@ class ReadAloudPanel(QWidget):
         self.resume_button = QPushButton("")
         self.resume_button.hide()
 
-        self.voice = QComboBox()
+        self.voice = QComboBox(accessibleName="Voice", toolTip="All voices read English.")
         for name in VOICES:
             self.voice.addItem(_voice_label(name), name)
         self.voice.setCurrentIndex(self.voice.findData(controller.voice_name))
-        self.speed = QComboBox()
+        self.speed = QComboBox(accessibleName="Speed")
         self.speed.addItems([f"{s:g}×" for s in SPEEDS])
         self.speed.setCurrentText(f"{controller.speed:g}×")
         self.follow = QCheckBox("Follow along in the page")
@@ -162,7 +162,7 @@ class ReadAloudPanel(QWidget):
             self.resume_button.setText(f"Go back to your place on page {page + 1}")
 
     def _transport_button(self, icon, tip):
-        button = QToolButton(toolTip=tip)
+        button = QToolButton(toolTip=tip, accessibleName=tip)
         button.setIconSize(QSize(20, 20))
         theme.bind(button, icon, "text")
         return button
