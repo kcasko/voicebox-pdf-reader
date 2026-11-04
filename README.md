@@ -58,10 +58,18 @@ to Open With for PDFs. Sign the exe and the installer before distributing them.
 
 Press **F5** to read or pause, **F6** and **F7** for the previous and next sentence,
 and **Shift+F5** to stop. Right-click a page for **Read Aloud From Here** or
-**Read Selection Aloud**. Each PDF remembers its own place.
+**Read Selection Aloud**. Each PDF remembers its own place. If you've moved to another
+page, F5 reads that page and the panel offers a way back to your place.
+
+Read Aloud handles English only. It reads columns in order, says numbers and dates
+naturally, and by default skips citations, links, footnotes and reference lists.
 
 Voices run on the CPU and are kept in `plugins\read_aloud\models`. If that folder is
 missing, they download once on the first read (about 350 MB).
+
+Audio is saved on your computer so that sentences don't have to be generated twice. Clear
+it with **Read Aloud > Clear Saved Audio**. Audio of a PDF with a password or restrictions
+is deleted when the PDF closes.
 
 ## Plugins
 
@@ -97,7 +105,9 @@ def deactivate():      # optional
 On a view, `set_overlay(owner, {page: [rects]}, color)` marks text on screen without
 changing the PDF. `plugins/document_stats` is a small example to copy.
 
-Plugins run with the same access as the app, so only install ones you trust.
+Plugins run with the same access as the app, so only install ones you trust. One added to
+`%APPDATA%\PDFDesk\plugins` stays off until you turn it on in **Manage Plugins**, and again
+if its files change.
 
 ## Tests
 
@@ -108,3 +118,10 @@ Plugins run with the same access as the app, so only install ones you trust.
 
 The second command checks real read-aloud, MP3 export and OCR, muted, with any
 separately installed ffmpeg or Tesseract hidden from the app.
+
+To see how PDFs will be read, run `tests\reading_report.py` for the generated cases, or
+give it a folder of your own PDFs and a file to write the spoken text to:
+
+```
+.venv\Scripts\python tests\reading_report.py C:\my-pdfs report.txt
+```

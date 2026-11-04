@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QToolButton,
@@ -26,6 +27,7 @@ from .tts import VOICES
 SPEEDS = [0.75, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.75, 2.0]
 PANEL_WIDTH = 300
 IDLE_TEXT = "Press play to start listening from where you left off."
+TITLE_LIMIT = 40
 
 _controller = None
 _panel = None
@@ -33,6 +35,17 @@ _panel = None
 
 def api_for_check():
     return _controller.api
+
+
+def clip(text, limit):
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def progress_through(document, page, page_fraction):
+    """How far through the document a place on a page is, from 0 to 1."""
+    if not document or not len(document):
+        return 0.0
+    return min(1.0, (page + page_fraction) / len(document))
 
 
 def _voice_label(name):
@@ -65,7 +78,10 @@ class ReadAloudPanel(QWidget):
 
         card = QFrame(objectName="card")
         self.page_label = QLabel("NOW READING", objectName="sectionLabel")
-        self.sentence = QLabel(IDLE_TEXT, objectName="nowReading", wordWrap=True)
+        self.document_label = QLabel("", objectName="panelStatus", textFormat=Qt.PlainText)
+        self.document_label.hide()
+        # What's on the page is shown as written, never interpreted as markup.
+        self.sentence = QLabel(IDLE_TEXT, objectName="nowReading", wordWrap=True, textFormat=Qt.PlainText)
         self.sentence.setMinimumHeight(84)
         self.sentence.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.sentence.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -75,8 +91,11 @@ class ReadAloudPanel(QWidget):
         card_layout.setContentsMargins(14, 12, 14, 14)
         card_layout.setSpacing(8)
         card_layout.addWidget(self.page_label)
+        card_layout.addWidget(self.document_label)
         card_layout.addWidget(self.sentence, 1)
         card_layout.addWidget(self.progress)
+        self.resume_button = QPushButton("")
+        self.resume_button.hide()
 
         self.voice = QComboBox()
         for name in VOICES:
@@ -87,6 +106,8 @@ class ReadAloudPanel(QWidget):
         self.speed.setCurrentText(f"{controller.speed:g}×")
         self.follow = QCheckBox("Follow along in the page")
         self.follow.setChecked(controller.follow)
+        self.skip = QCheckBox("Skip citations, links and footnotes")
+        self.skip.setChecked(controller.skip_references)
         read_page = QPushButton("Read This Page")
         export = QPushButton("Export MP3...")
         theme.bind(export, "export", "text")
@@ -94,7 +115,7 @@ class ReadAloudPanel(QWidget):
         extra.setSpacing(8)
         extra.addWidget(read_page)
         extra.addWidget(export)
-        self.status = QLabel("", objectName="panelStatus", wordWrap=True)
+        self.status = QLabel("", objectName="panelStatus", wordWrap=True, textFormat=Qt.PlainText)
         self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
         layout = QVBoxLayout(self)
@@ -103,6 +124,7 @@ class ReadAloudPanel(QWidget):
         layout.addLayout(transport)
         layout.addSpacing(8)
         layout.addWidget(card)
+        layout.addWidget(self.resume_button)
         layout.addSpacing(8)
         layout.addWidget(QLabel("VOICE", objectName="sectionLabel"))
         layout.addWidget(self.voice)
@@ -111,6 +133,7 @@ class ReadAloudPanel(QWidget):
         layout.addWidget(self.speed)
         layout.addSpacing(4)
         layout.addWidget(self.follow)
+        layout.addWidget(self.skip)
         layout.addSpacing(6)
         layout.addLayout(extra)
         layout.addWidget(self.status)
@@ -123,12 +146,20 @@ class ReadAloudPanel(QWidget):
         self.voice.currentIndexChanged.connect(lambda _i: controller.set_voice(self.voice.currentData()))
         self.speed.currentTextChanged.connect(lambda text: controller.set_speed(float(text.rstrip("×"))))
         self.follow.toggled.connect(controller.set_follow)
+        self.skip.toggled.connect(controller.set_skip_references)
         read_page.clicked.connect(self._read_page)
         export.clicked.connect(self._export)
+        self.resume_button.clicked.connect(controller.resume_offer)
         controller.state_changed.connect(self._on_state)
         controller.message.connect(self.status.setText)
         controller.now_reading.connect(self._on_now_reading)
+        controller.resume_offered.connect(self._on_resume_offered)
         self._on_state()
+
+    def _on_resume_offered(self, page):
+        self.resume_button.setVisible(page >= 0)
+        if page >= 0:
+            self.resume_button.setText(f"Go back to your place on page {page + 1}")
 
     def _transport_button(self, icon, tip):
         button = QToolButton(toolTip=tip)
@@ -143,24 +174,28 @@ class ReadAloudPanel(QWidget):
     def _on_now_reading(self, text, page):
         if page < 0:
             self.page_label.setText("NOW READING")
+            self.document_label.hide()
             self.sentence.setText(IDLE_TEXT)
             self.progress.setValue(0)
             return
         document = self.controller.document
         total = len(document) if document else 1
         self.page_label.setText(f"PAGE {page + 1} OF {total}")
+        if document:
+            self.document_label.setText(clip(document.title, TITLE_LIMIT))
+            self.document_label.show()
         self.sentence.setText(text)
-        self.progress.setValue(round(1000 * (page + 1) / max(1, total)))
+        self.progress.setValue(round(1000 * progress_through(document, page, self.controller.page_fraction())))
 
     def stop(self):
-        self.controller._save_position()
+        saved = self.controller._save_position()
         self.controller.stop()
-        self.status.setText("Stopped. Your place in this PDF is saved.")
+        self.status.setText("Stopped. Your place in this PDF is saved." if saved else "Stopped.")
 
     def _read_page(self):
         view = self.api.current_view()
         if view:
-            self.controller.read_from(view.document, view.current_page, 0)
+            self.controller.read_from(view.document, view.current_page, 0, last_page=view.current_page)
         else:
             self.status.setText("Open a PDF first.")
 
@@ -188,13 +223,23 @@ class ReadAloudPanel(QWidget):
         Mp3Export(
             self.api,
             document,
-            min(pages),
-            max(pages),
+            pages,
             VOICES[controller.voice_name],
             controller.speed,
             out,
-            controller.cache_dir,
+            controller.cache_for(document),
+            controller.skip_references,
         ).start()
+
+    def clear_saved_data(self):
+        answer = QMessageBox.question(
+            self,
+            "Clear saved audio",
+            "Delete the saved audio of everything you've listened to, and your saved places in each PDF?",
+        )
+        if answer == QMessageBox.Yes:
+            self.controller.clear_saved_data()
+            self.status.setText("Saved audio and places were cleared.")
 
 
 def activate(api):
@@ -209,11 +254,19 @@ def activate(api):
         dock.show()
         _controller.toggle()
 
-    api.add_action("Read Aloud", "Read Aloud", read_or_pause, shortcut="F5", toolbar=True, icon="volume", primary=True)
+    main_action = api.add_action("Read Aloud", "Read Aloud", read_or_pause, shortcut="F5", toolbar=True, icon="volume", primary=True)
     api.add_action("Read Aloud", "Stop", _panel.stop, shortcut="Shift+F5")
     api.add_action("Read Aloud", "Previous Sentence", _controller.previous, shortcut="F6")
     api.add_action("Read Aloud", "Next Sentence", _controller.next, shortcut="F7")
     api.add_action("Read Aloud", "Show Panel", dock.show)
+    api.add_action("Read Aloud", "Clear Saved Audio...", _panel.clear_saved_data)
+
+    def show_state():
+        state = _controller.state
+        main_action.setText({"playing": "Pause", "waiting": "Pause", "paused": "Resume"}.get(state, "Read Aloud"))
+        theme.bind(main_action, "pause" if state in ("playing", "waiting") else "volume", "on_accent")
+
+    _controller.state_changed.connect(show_state)
     api.on("document_changed", _controller.on_document_changed)
     api.on("document_closed", _controller.on_document_closed)
 

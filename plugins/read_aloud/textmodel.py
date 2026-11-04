@@ -14,15 +14,153 @@ FURNITURE_SAMPLE = 24
 FURNITURE_SHARE = 0.3
 HEADING_SIZE_RATIO = 1.15
 HEADING_MAX_CHARS = 120
-BULLETS = set("•▪◦■●‣⁃·")
+FOOTNOTE_SIZE_RATIO = 0.85
+FOOTNOTE_ZONE = 0.7
+BULLETS = set("•▪◦■●‣⁃·")
 ABBREVIATIONS = {
     "mr.", "mrs.", "ms.", "dr.", "prof.", "sr.", "jr.", "st.", "vs.", "etc.", "e.g.", "i.e.",
     "fig.", "figs.", "no.", "nos.", "vol.", "pp.", "p.", "ed.", "eds.", "inc.", "ltd.", "co.",
     "cf.", "al.", "approx.", "dept.", "ch.", "sec.", "jan.", "feb.", "mar.", "apr.", "jun.",
-    "jul.", "aug.", "sep.", "sept.", "oct.", "nov.", "dec.",
+    "jul.", "aug.", "sep.", "sept.", "oct.", "nov.", "dec.", "eq.", "eqs.", "ref.", "refs.",
+}
+# A dotted acronym usually carries on ("the U.S. Army") unless one of these starts the next sentence.
+SENTENCE_STARTERS = {
+    "A", "An", "The", "This", "That", "These", "Those", "It", "He", "She", "They", "We", "You", "I",
+    "In", "On", "At", "As", "For", "But", "And", "However", "Although", "When", "While", "If", "There",
 }
 PAGE_NUMBER = re.compile(r"^(page\s*)?(\d+|[ivxlcdm]+)(\s*(/|of)\s*\d+)?$", re.I)
 SENTENCE_END = re.compile(r"[.!?][\"'”’)\]]*$")
+INITIAL = re.compile(r"^[A-Z]\.$")
+ACRONYM = re.compile(r"^(?:[A-Za-z]\.){2,}$")
+LIST_MARKER = re.compile(r"^\d{1,3}[.)]$")
+REFERENCE_HEADING = re.compile(r"^(?:[\dIVX]+\.?\s+)?(?:references|bibliography|works cited|literature cited)\.?$", re.I)
+
+# Column detection: a gutter is an empty vertical strip in the middle part of the page.
+GUTTER_MIN_WIDTH = 8
+GUTTER_ZONE = (0.2, 0.8)
+GUTTER_MAX_COVERAGE = 0.08
+WIDE_LINE_SHARE = 0.6
+COLUMN_MIN_LINES = 2
+COLUMN_MIN_WORDS = 4
+
+# Spoken text
+URL = re.compile(r"\b(?:https?://|www\.)\S+", re.I)
+NUMBERED_CITATION = re.compile(r"\s*\[\s*\d+(?:\s*[,;–-]\s*\d+)*\s*\]")
+_AUTHOR_YEAR = r"[A-Z][\w'’-]+(?:\s+(?:et\s+al\.?|(?:and|&)\s+[A-Z][\w'’-]+))?,?\s+(?:19|20)\d{2}[a-z]?(?:,\s*pp?\.\s*\d+)?"
+AUTHOR_CITATION = re.compile(rf"\s*\((?:see\s+)?{_AUTHOR_YEAR}(?:\s*;\s*{_AUTHOR_YEAR})*\)")
+YEAR_CITATION = re.compile(r"\s*\((?:19|20)\d{2}[a-z]?\)")
+MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+CURRENCIES = {"$": ("dollar", "cent"), "€": ("euro", "cent"), "£": ("pound", "penny")}
+MAGNITUDES = {"k": "thousand", "m": "million", "b": "billion"}
+SPOKEN_WORDS = [
+    (re.compile(r"\bEqs\.\s*(?=\d)"), "equations "),
+    (re.compile(r"\bEq\.\s*(?=\d)"), "equation "),
+    (re.compile(r"\bFigs\.\s*(?=\d)"), "figures "),
+    (re.compile(r"\bFig\.\s*(?=\d)"), "figure "),
+    (re.compile(r"\bpp\.\s*(?=\d)"), "pages "),
+    (re.compile(r"\bp\.\s*(?=\d)"), "page "),
+    (re.compile(r"\bNo\.\s*(?=\d)"), "number "),
+    (re.compile(r"\be\.g\.,?", re.I), "for example"),
+    (re.compile(r"\bi\.e\.,?", re.I), "that is"),
+    (re.compile(r"\bvs\.", re.I), "versus"),
+    (re.compile(r"\betc\.", re.I), "et cetera"),
+    (re.compile(r"\bet al\.", re.I), "et al"),
+    (re.compile(r"\bC\+\+"), "C plus plus"),
+    (re.compile(r"\bC#"), "C sharp"),
+    (re.compile(r"\s&\s"), " and "),
+    (re.compile(r"\s=\s"), " equals "),
+    (re.compile(r"\s≥\s"), " is at least "),
+    (re.compile(r"\s≤\s"), " is at most "),
+    (re.compile(r"\s≠\s"), " is not equal to "),
+    (re.compile(r"\s≈\s"), " is about "),
+    (re.compile(r"(?<=\d)\s?%"), " percent"),
+    (re.compile(r"(?<=\d)\s?–\s?(?=\d)"), " to "),
+]
+
+
+def _spoken_year(year):
+    if 2000 <= year <= 2009:
+        return str(year)
+    return f"{year // 100} {year % 100:02d}" if year % 100 >= 10 else str(year)
+
+
+def _spoken_date(month, day, year):
+    if year < 100:
+        year += 2000 if year < 50 else 1900
+    return f"{MONTHS[month - 1]} {day}, {_spoken_year(year)}"
+
+
+def _slash_date(match):
+    first, second, year = int(match[1]), int(match[2]), int(match[3])
+    # Month first unless that's impossible; a page can't say which convention it uses.
+    month, day = (second, first) if first > 12 else (first, second)
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return match[0]
+    return _spoken_date(month, day, year)
+
+
+def _iso_date(match):
+    year, month, day = int(match[1]), int(match[2]), int(match[3])
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return match[0]
+    return _spoken_date(month, day, year)
+
+
+def _written_date(match):
+    return f"{match[1]} {match[2]}, {_spoken_year(int(match[3]))}"
+
+
+def _time(match):
+    hour, minute = int(match[1]), int(match[2])
+    if hour > 23 or minute > 59:
+        return match[0]
+    suffix = f" {match[3][0].upper()} M" if match[3] else ""
+    if minute == 0:
+        return f"{hour}{suffix}" if suffix else f"{hour} o'clock"
+    spoken = f"oh {minute}" if minute < 10 else str(minute)
+    return f"{hour} {spoken}{suffix}"
+
+
+def _money_scale(match):
+    unit = CURRENCIES[match[1]][0]
+    scale = match[3].lower()
+    return f"{match[2]} {MAGNITUDES.get(scale, scale)} {unit}s"
+
+
+def _money(match):
+    unit, small = CURRENCIES[match[1]]
+    whole = match[2].replace(",", "")
+    words = f"{match[2]} {unit}" + ("" if whole == "1" else "s")
+    if not match[3] or int(match[3]) == 0:
+        return words
+    if int(match[3]) == 1:
+        return f"{words} and 1 {small}"
+    plural = "pence" if small == "penny" else small + "s"
+    return f"{words} and {int(match[3])} {plural}"
+
+
+NUMBER_FORMS = [
+    (re.compile(r"([$€£])(\d[\d,]*(?:\.\d+)?)\s*(thousand|million|billion|trillion|[kKmMbB])\b"), _money_scale),
+    (re.compile(r"([$€£])(\d[\d,]*)(?:\.(\d{2}))?(?![\d.]*\d)"), _money),
+    (re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4}|\d{2})\b"), _slash_date),
+    (re.compile(r"\b((?:19|20)\d{2})-(\d{2})-(\d{2})\b"), _iso_date),
+    (re.compile(rf"\b({'|'.join(MONTHS)})\s+(\d{{1,2}}),?\s+((?:19|20)\d{{2}})\b"), _written_date),
+    (re.compile(r"\b(\d{1,2}):(\d{2})(?::\d{2})?(?:\s*([AaPp])\.?[Mm]\.?)?(?![\d:])"), _time),
+]
+
+
+def spoken_text(text, skip_references=False):
+    """What the voice should say for a chunk. The page and the panel keep showing the original text."""
+    if skip_references:
+        for pattern in (URL, NUMBERED_CITATION, AUTHOR_CITATION, YEAR_CITATION):
+            text = pattern.sub("", text)
+    for pattern, replacement in NUMBER_FORMS:
+        text = pattern.sub(replacement, text)
+    for pattern, replacement in SPOKEN_WORDS:
+        text = pattern.sub(replacement, text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    return text if any(c.isalnum() for c in text) else ""
 
 
 @dataclass
@@ -34,6 +172,8 @@ class Chunk:
     end_word: int
     rects: dict = field(default_factory=dict)
     heading: bool = False
+    spoken: str = ""
+    keys: frozenset = frozenset()  # (page, word index) of every word in the chunk
 
 
 @dataclass
@@ -43,12 +183,21 @@ class _Line:
     y0: float
     y1: float
 
+    @property
+    def x0(self):
+        return min(w.rect[0] for w in self.words)
+
+    @property
+    def x1(self):
+        return max(w.rect[2] for w in self.words)
+
 
 @dataclass
 class _Token:
     text: str
     sources: list  # [(page, Word), ...]
     ends_line: bool = False
+    list_marker: bool = False
 
 
 def page_lines(document, index):
@@ -68,6 +217,90 @@ def page_lines(document, index):
         )
         for words in lines
     ]
+
+
+def _find_gutters(lines, width):
+    """Find empty vertical strips between columns. Lines spanning most of the page don't count."""
+    narrow = [line for line in lines if line.x1 - line.x0 < width * WIDE_LINE_SHARE]
+    total = sum(line.y1 - line.y0 for line in narrow)
+    if total <= 0:
+        return []
+    coverage = [0.0] * (int(width) + 2)
+    for line in narrow:
+        height = line.y1 - line.y0
+        for x in range(max(0, int(line.x0)), min(len(coverage), int(line.x1) + 1)):
+            coverage[x] += height
+    first, last = int(width * GUTTER_ZONE[0]), int(width * GUTTER_ZONE[1])
+    gutters, start = [], None
+    for x in range(first, last + 2):
+        empty = x <= last and coverage[x] <= total * GUTTER_MAX_COVERAGE
+        if empty and start is None:
+            start = x
+        elif not empty and start is not None:
+            if x - start >= GUTTER_MIN_WIDTH:
+                gutters.append((start + x) / 2)
+            start = None
+    return gutters
+
+
+def _is_prose_column(lines):
+    # Short cells side by side are a table, which reads row by row.
+    if len(lines) < COLUMN_MIN_LINES:
+        return False
+    return statistics.median(len(line.words) for line in lines) >= COLUMN_MIN_WORDS
+
+
+def reading_order(lines, width):
+    """Put multi-column text in the order people read it. Anything else keeps the file's own order."""
+    gutters = _find_gutters(lines, width)
+    if not gutters:
+        return lines
+    blocks = {}
+    for line in lines:
+        blocks.setdefault(line.words[0].block, []).append(line)
+    edges = [float("-inf")] + gutters + [float("inf")]
+    columns = [[] for _ in range(len(edges) - 1)]
+    spanning = []
+    def column_of(x0, x1):
+        for i in range(len(columns)):
+            if edges[i] - 2 <= x0 and x1 <= edges[i + 1] + 2:
+                return i
+        return None
+
+    for block in blocks.values():
+        whole = column_of(min(l.x0 for l in block), max(l.x1 for l in block))
+        if whole is not None:
+            columns[whole].append(block)
+            continue
+        # Some files keep lines from both columns in one block, so look at them separately.
+        places = [column_of(l.x0, l.x1) for l in block]
+        if None in places:
+            # A block reaching past its column belongs to the whole page width.
+            spanning.append(block)
+        else:
+            for line, place in zip(block, places):
+                columns[place].append([line])
+    for column in columns:
+        if not _is_prose_column([line for block in column for line in block]):
+            return lines
+    extents = [(min(b[0].y0 for b in c), max(b[-1].y1 for b in c)) for c in columns]
+    for (top_a, bottom_a), (top_b, bottom_b) in zip(extents, extents[1:]):
+        overlap = min(bottom_a, bottom_b) - max(top_a, top_b)
+        if overlap < 0.5 * min(bottom_a - top_a, bottom_b - top_b):
+            return lines
+    # Titles, abstracts and wide figures divide the page; columns are read within each band.
+    spanning.sort(key=lambda block: block[0].y0)
+    ordered, top = [], float("-inf")
+    for divider in spanning + [None]:
+        bottom = divider[0].y0 if divider else float("inf")
+        for column in columns:
+            band = [b for b in column if top <= (b[0].y0 + b[-1].y1) / 2 < bottom]
+            for block in sorted(band, key=lambda b: b[0].y0):
+                ordered.extend(block)
+        if divider:
+            ordered.extend(divider)
+            top = divider[-1].y1
+    return ordered
 
 
 def _furniture_key(text):
@@ -115,21 +348,43 @@ def _page_styles(page):
     return styles, body, (bold_chars / total_chars if total_chars else 0)
 
 
-def _is_heading(line, styles, body, bold_share):
-    if len(line.text) > HEADING_MAX_CHARS or not any(c.isalpha() for c in line.text):
-        return False
+def _style_at(line, styles):
     first = line.words[0].rect
     cx, cy = (first[0] + first[2]) / 2, (first[1] + first[3]) / 2
     for bbox, bold, size in styles:
         if bbox[0] <= cx <= bbox[2] and bbox[1] <= cy <= bbox[3]:
-            large = body and size >= body * HEADING_SIZE_RATIO
-            # On a mostly bold page, bold doesn't say anything about structure.
-            return large or (bold and bold_share < 0.5)
-    return False
+            return bold, size
+    return None
 
 
-def _ends_sentence(text):
-    return bool(SENTENCE_END.search(text)) and text.lower().rstrip("\"'”’)]") not in ABBREVIATIONS
+def _is_heading(line, styles, body, bold_share):
+    if len(line.text) > HEADING_MAX_CHARS or not any(c.isalpha() for c in line.text):
+        return False
+    style = _style_at(line, styles)
+    if style is None:
+        return False
+    bold, size = style
+    large = body and size >= body * HEADING_SIZE_RATIO
+    # On a mostly bold page, bold doesn't say anything about structure.
+    return large or (bold and bold_share < 0.5)
+
+
+def _is_footnote(line, styles, body, height):
+    if line.y0 < height * FOOTNOTE_ZONE or not body:
+        return False
+    style = _style_at(line, styles)
+    return style is not None and style[1] <= body * FOOTNOTE_SIZE_RATIO
+
+
+def _ends_sentence(text, next_text=None):
+    if not SENTENCE_END.search(text):
+        return False
+    bare = text.rstrip("\"'”’)]")
+    if bare.lower() in ABBREVIATIONS or INITIAL.match(bare):
+        return False
+    if ACRONYM.match(bare):
+        return next_text is None or next_text.lstrip("\"'“‘([") in SENTENCE_STARTERS
+    return True
 
 
 def _starts_sentence(text):
@@ -140,11 +395,13 @@ def _starts_sentence(text):
 class ChunkBuilder:
     """Feed pages in order. Sentences carry across page breaks until they end."""
 
-    def __init__(self, document, furniture=frozenset()):
+    def __init__(self, document, furniture=frozenset(), skip_references=False):
         self.document = document
         self.furniture = furniture
+        self.skip_references = skip_references
         self.chunks = []
         self._tokens = []
+        self._in_references = False
 
     def feed(self, index, first_word=0, last_word=None):
         page = self.document.page(index)
@@ -152,12 +409,13 @@ class ChunkBuilder:
         height = page.rect.height
         heading = []
         previous_block = None
-        for line in page_lines(self.document, index):
+        lines = [
+            line
+            for line in page_lines(self.document, index)
+            if not (_in_margin(line, height) and (PAGE_NUMBER.match(line.text.strip()) or _furniture_key(line.text) in self.furniture))
+        ]
+        for line in reading_order(lines, page.rect.width):
             if line.words[-1].index < first_word or (last_word is not None and line.words[0].index > last_word):
-                continue
-            if _in_margin(line, height) and (
-                PAGE_NUMBER.match(line.text.strip()) or _furniture_key(line.text) in self.furniture
-            ):
                 continue
             words = [w for w in line.words if w.index >= first_word and (last_word is None or w.index <= last_word)]
             if _is_heading(line, styles, body, bold_share):
@@ -169,6 +427,8 @@ class ChunkBuilder:
             if heading:
                 self._emit_heading(index, heading)
                 heading = []
+            if self.skip_references and (self._in_references or _is_footnote(line, styles, body, height)):
+                continue
             block = words[0].block
             if previous_block is not None and block != previous_block and self._tokens:
                 if _ends_sentence(self._tokens[-1].text):
@@ -193,10 +453,13 @@ class ChunkBuilder:
             text = text.lstrip("".join(BULLETS)) or text
             if position == 0 and self._merge_hyphenated(text, index, word):
                 continue
+            marker = position == 0 and len(words) > 1 and bool(LIST_MARKER.match(text))
             previous = self._tokens[-1] if self._tokens else None
-            if previous and _ends_sentence(previous.text) and _starts_sentence(text):
+            if marker:
+                self._flush()
+            elif previous and not previous.list_marker and _ends_sentence(previous.text, text) and _starts_sentence(text):
                 self._flush(respect_minimum=True)
-            self._tokens.append(_Token(text, [(index, word)]))
+            self._tokens.append(_Token(text, [(index, word)], list_marker=marker))
             self._split_if_long()
         if self._tokens:
             self._tokens[-1].ends_line = True
@@ -237,6 +500,11 @@ class ChunkBuilder:
 
     def _emit_heading(self, index, words):
         self._flush()
+        text = " ".join(w.text for w in words)
+        if self.skip_references:
+            self._in_references = bool(REFERENCE_HEADING.match(text.strip()))
+            if self._in_references:
+                return
         self._emit([_Token(w.text, [(index, w)]) for w in words if w.text.strip()], True)
 
     def _emit(self, tokens, heading):
@@ -245,6 +513,10 @@ class ChunkBuilder:
             return
         if heading and text[-1] not in ".!?:":
             text += "."
+        spoken = spoken_text(text, self.skip_references)
+        # A sentence that was nothing but a citation or a link leaves nothing to say.
+        if not spoken:
+            return
         sources = [source for token in tokens for source in token.sources]
         rects = {}
         for page, word in sources:
@@ -264,13 +536,26 @@ class ChunkBuilder:
                 end_word=sources[-1][1].index,
                 rects={page: [r for _, r in rows] for page, rows in rects.items()},
                 heading=heading,
+                spoken=spoken,
+                keys=frozenset((page, word.index) for page, word in sources),
             )
         )
 
 
 def first_chunk_at(chunks, page, word):
-    """Index of the chunk that contains or follows a word, or None if it is still unbuilt."""
+    """Index of the chunk that holds a word, or the next one after it. None if that isn't built yet.
+
+    Word numbers follow the file's order, which isn't always reading order, so chunks can't be
+    compared by number alone.
+    """
+    target = (page, word)
     for i, chunk in enumerate(chunks):
-        if (chunk.end_page, chunk.end_word) >= (page, word):
+        if target in chunk.keys:
+            return i
+    # The word produced no chunk, such as a page number, or it's still being built.
+    if not any(chunk.page > page for chunk in chunks):
+        return None
+    for i, chunk in enumerate(chunks):
+        if chunk.page > page or (chunk.page == page and chunk.word >= word):
             return i
     return None

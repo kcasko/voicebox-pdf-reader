@@ -17,18 +17,17 @@ HEADING_SILENCE_SECONDS = 0.35
 
 
 class Mp3Export(QObject):
-    def __init__(self, api, document, first_page, last_page, voice_id, speed, out_path, cache_dir):
+    def __init__(self, api, document, pages, voice_id, speed, out_path, cache_dir, skip_references=True):
         super().__init__(api.window)
         self.api = api
         self.document = document
-        self.first_page = first_page
-        self.last_page = last_page
+        self.pages = list(pages)
         self.voice_id = voice_id
         self.speed = speed
         self.out_path = out_path
         self.cache_dir = cache_dir
-        self.next_page = first_page
-        self.builder = ChunkBuilder(document, find_furniture(document))
+        self.next_page = 0
+        self.builder = ChunkBuilder(document, find_furniture(document), skip_references)
         self.jobs = []
         self.done = 0
         self.temp_dir = None
@@ -37,7 +36,7 @@ class Mp3Export(QObject):
         self.synth.ready.connect(self._on_ready)
         self.synth.failed.connect(lambda _path, error: self._fail(f"Voice problem: {error}"))
         self.synth.progress.connect(lambda text: self.progress.setLabelText(text))
-        self.progress = QProgressDialog("Preparing text...", "Cancel", 0, last_page - first_page + 1, api.window)
+        self.progress = QProgressDialog("Preparing text...", "Cancel", 0, len(self.pages), api.window)
         self.progress.setWindowTitle("Export MP3")
         self.progress.setWindowModality(Qt.WindowModal)
         self.progress.setMinimumDuration(0)
@@ -49,13 +48,13 @@ class Mp3Export(QObject):
         self.timer.start()
 
     def _build_tick(self):
-        if self.next_page > self.last_page:
+        if self.next_page >= len(self.pages):
             self.timer.stop()
             self._start_audio()
             return
-        self.builder.feed(self.next_page)
+        self.builder.feed(self.pages[self.next_page])
         self.next_page += 1
-        self.progress.setValue(self.next_page - self.first_page)
+        self.progress.setValue(self.next_page)
 
     def _start_audio(self):
         chunks = self.builder.finish()
@@ -63,7 +62,7 @@ class Mp3Export(QObject):
             self._fail("There's no readable text in those pages.")
             return
         self.chunks = chunks
-        self.jobs = [Job(self.cache_dir, self.voice_id, c.text) for c in chunks]
+        self.jobs = [Job(self.cache_dir, self.voice_id, c.spoken) for c in chunks]
         self.progress.setLabelText("Generating voice...")
         self.progress.setRange(0, len(self.jobs))
         self._check_ready()

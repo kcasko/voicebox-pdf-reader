@@ -299,6 +299,9 @@ class Theme(QObject):
 
     def bind(self, target, name, role="text"):
         """Give an action or button an icon that follows theme changes."""
+        # A bad name would otherwise fail on every later theme change, for the whole app.
+        if name not in ICONS:
+            raise ValueError(f"Unknown icon: {name}")
         binding = (target, name, role)
         self._bindings = [b for b in self._bindings if b[0] is not target]
         self._bindings.append(binding)

@@ -1,8 +1,8 @@
 import logging
 import os
 
-from PySide6.QtCore import QRect, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QPainter
+from PySide6.QtCore import QRect, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence, QPainter
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -44,6 +44,7 @@ log = logging.getLogger(__name__)
 
 PDF_FILTER = "PDF files (*.pdf)"
 MAX_RECENT = 12
+MAX_REMEMBERED_VIEWS = 200
 ZOOM_PRESETS = ["Fit width", "Fit page", "50%", "75%", "100%", "125%", "150%", "200%", "300%"]
 LOGO_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "pdfdesk.ico")
 ANNOTATION_TOOLS = [
@@ -177,6 +178,8 @@ class MainWindow(QMainWindow):
         self.act_fit_width = a("Fit Width", lambda: self._with_view(lambda v: v.set_fit("width")), "Ctrl+1")
         self.act_fit_page = a("Fit Page", lambda: self._with_view(lambda v: v.set_fit("page")), "Ctrl+2")
         self.act_go_to = a("Go to Page...", self._go_to_dialog, "Ctrl+G")
+        self.act_actual_size = a("Actual Size", lambda: self._with_view(lambda v: v.set_zoom(1.0)), "Ctrl+0")
+        self.act_full_screen = a("Full Screen", self._toggle_full_screen, "F11", needs_document=False)
 
     def _build_toolbars(self):
         main = QToolBar("Main", objectName="main-toolbar", movable=False, floatable=False)
@@ -270,7 +273,7 @@ class MainWindow(QMainWindow):
             menu.addAction(action)
 
         menu = bar.addMenu("&View")
-        for action in (self.act_zoom_in, self.act_zoom_out, self.act_fit_width, self.act_fit_page, self.act_go_to):
+        for action in (self.act_zoom_in, self.act_zoom_out, self.act_actual_size, self.act_fit_width, self.act_fit_page, self.act_go_to, self.act_full_screen):
             menu.addAction(action)
         menu.addSeparator()
         menu.addAction(self._action("Show or Hide Side Panel", self._toggle_side, "F4", needs_document=False))
@@ -311,6 +314,7 @@ class MainWindow(QMainWindow):
         self.menu_plugins.addSeparator()
 
         menu = bar.addMenu("&Help")
+        menu.addAction(self._action("Open Log Folder", self._open_logs, needs_document=False))
         menu.addAction(self._action(f"About {APP_NAME}", self._about, needs_document=False))
 
     def _document_action_on(self, menu, text, callback, shortcut=None):
@@ -337,6 +341,17 @@ class MainWindow(QMainWindow):
 
     def _toggle_side(self):
         self.side.set_collapsed(self.side.is_open())
+
+    def _toggle_full_screen(self):
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+
+    def _open_logs(self):
+        folder = os.path.join(self.home, "logs")
+        os.makedirs(folder, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
     def set_theme(self, mode):
         self.settings["theme"] = mode
@@ -389,9 +404,33 @@ class MainWindow(QMainWindow):
         document.changed.connect(lambda structural, d=document: self.plugins.emit("document_changed", d, structural))
         self.tabs.addTab(view, document.title)
         self.tabs.setCurrentWidget(view)
+        self._restore_view(view)
         self._add_recent(path)
         self.plugins.emit("document_opened", document)
         return view
+
+    def _restore_view(self, view):
+        saved = self.settings.get("views", {}).get(os.path.normcase(view.document.path))
+        if not isinstance(saved, list) or len(saved) != 3:
+            return
+        page, zoom, fit = saved
+        if fit in ("width", "page"):
+            view.set_fit(fit)
+        elif isinstance(zoom, (int, float)):
+            view.set_zoom(zoom)
+        if isinstance(page, int):
+            view.go_to_page(page)
+
+    def _remember_view(self, view):
+        if not view.document.path:
+            return
+        views = self.settings.setdefault("views", {})
+        key = os.path.normcase(view.document.path)
+        # Most recent last, so the oldest is the one to drop.
+        views.pop(key, None)
+        views[key] = [view.current_page, view.zoom, view.fit_mode]
+        while len(views) > MAX_REMEMBERED_VIEWS:
+            del views[next(iter(views))]
 
     def _load_document(self, path):
         password = None
@@ -420,11 +459,23 @@ class MainWindow(QMainWindow):
             self.recent_menu.addAction("No recent files").setEnabled(False)
         for path in recent:
             self.recent_menu.addAction(path, lambda p=path: self.open_path(p))
+        if recent:
+            self.recent_menu.addSeparator()
+            self.recent_menu.addAction("Clear Recent Files", self.clear_recent)
+
+    def clear_recent(self):
+        """Forget which files were opened, and the page each one was on."""
+        self.settings["recent"] = []
+        self.settings["views"] = {}
+        save_json(self.settings_path, self.settings)
+        self.welcome.set_recent([])
 
     def close_tab(self, index):
         view = self.tabs.widget(index)
         if view is None or not self._confirm_discard(view):
             return False
+        self._remember_view(view)
+        save_json(self.settings_path, self.settings)
         self.tabs.removeTab(index)
         self.thumbnails.forget(view.document)
         self.plugins.emit("document_closed", view.document)
@@ -451,6 +502,8 @@ class MainWindow(QMainWindow):
             if not self._confirm_discard(view):
                 event.ignore()
                 return
+        for view in self.views():
+            self._remember_view(view)
         self.settings["geometry"] = bytes(self.saveGeometry().toBase64()).decode()
         save_json(self.settings_path, self.settings)
         self.plugins.shutdown()
@@ -577,9 +630,10 @@ class MainWindow(QMainWindow):
     def _on_page_input(self):
         view = self.current_view()
         text = self.page_input.text().strip()
-        if view and text.isdigit():
+        if view and text.isdecimal():
             view.go_to_page(int(text) - 1)
             view.setFocus()
+        self._update_page_label()
 
     def _on_zoom_box(self):
         view = self.current_view()
@@ -844,7 +898,15 @@ class PluginDialog(QDialog):
         buttons.accepted.connect(self.accept)
         layout = QVBoxLayout(self)
         layout.addWidget(self.table)
-        layout.addWidget(QLabel(f"Add your own by dropping a plugin folder into:\n{os.path.join(manager.home, 'plugins')}"))
+        layout.addWidget(
+            QLabel(
+                "Plugins run with the same access to your files as this app, and nothing limits what they do. "
+                "Ones you add stay off until you turn them on.\n"
+                f"Add your own by dropping a plugin folder into:\n{os.path.join(manager.home, 'plugins')}",
+                wordWrap=True,
+                textFormat=Qt.PlainText,
+            )
+        )
         layout.addWidget(self.error)
         layout.addWidget(buttons)
         self._fill()
@@ -878,6 +940,23 @@ class PluginDialog(QDialog):
         self.error.setText("\n".join(errors))
 
     def _on_item_changed(self, item):
-        if item.column() == 0:
-            self.manager.set_enabled(item.data(Qt.UserRole), item.checkState() == Qt.Checked)
-            self._fill()
+        if item.column() != 0:
+            return
+        plugin_id = item.data(Qt.UserRole)
+        enabled = item.checkState() == Qt.Checked
+        if enabled and self.manager.needs_approval(plugin_id):
+            info = self.manager.plugins[plugin_id]
+            answer = QMessageBox.warning(
+                self,
+                "Turn on this plugin?",
+                f"{clip(info.name, PLUGIN_TEXT_LIMITS['name'])} will run as a program on this computer, "
+                f"with access to all your files.\n\nFolder: {info.folder}\n\nOnly turn it on if you trust where it came from.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                self._fill()
+                return
+            self.manager.approve(plugin_id)
+        self.manager.set_enabled(plugin_id, enabled)
+        self._fill()

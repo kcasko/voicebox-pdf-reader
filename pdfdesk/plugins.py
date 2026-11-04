@@ -11,6 +11,7 @@ plugin is turned off. Plugins run with the same access as the app, so only
 install ones you trust.
 """
 
+import hashlib
 import importlib.util
 import json
 import logging
@@ -25,7 +26,7 @@ from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import QDockWidget
 
 from .settings import APP_HOME, load_json, save_json
-from .theme import theme
+from .theme import ICONS, theme
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +71,21 @@ def read_manifest(path, folder):
     if not isinstance(version, (str, int, float)):
         raise ValueError('"version" must be text')
     return PluginInfo(plugin_id, data.get("name") or plugin_id, str(version), data.get("description", ""), folder)
+
+
+def folder_fingerprint(folder):
+    """A hash of a plugin's files, so changed code has to be approved again."""
+    digest = hashlib.sha256()
+    for root, folders, files in os.walk(folder):
+        folders.sort()
+        for name in sorted(files):
+            if name.endswith(".pyc"):
+                continue
+            path = os.path.join(root, name)
+            digest.update(os.path.relpath(path, folder).encode("utf-8"))
+            with open(path, "rb") as f:
+                digest.update(f.read())
+    return digest.hexdigest()
 
 
 @dataclass
@@ -133,8 +149,10 @@ class PluginApi:
         action.triggered.connect(lambda _checked=False: callback())
         if shortcut:
             action.setShortcut(QKeySequence(shortcut))
-        if icon:
+        if icon in ICONS:
             theme.bind(action, icon, "on_accent" if primary and toolbar else "text")
+        elif icon:
+            log.warning("Plugin %s asked for an unknown icon: %s", self.info.id, icon)
         self._window.plugin_menu(menu).addAction(action)
         if toolbar:
             bar = self._window.plugin_toolbar()
@@ -188,7 +206,11 @@ class PluginManager:
         self.home = home
         self.plugins = {}
         self._state_path = os.path.join(home, "plugins.json")
-        self._disabled = set(load_json(self._state_path).get("disabled", []))
+        state = load_json(self._state_path)
+        disabled, approved = state.get("disabled", []), state.get("approved", {})
+        self._disabled = set(disabled) if isinstance(disabled, list) else set()
+        self._approved = approved if isinstance(approved, dict) else {}
+        self._user_folder = os.path.normcase(os.path.join(home, "plugins"))
 
     def discover(self):
         for root in self.folders:
@@ -208,20 +230,36 @@ class PluginManager:
 
     def load_enabled(self):
         for info in self.plugins.values():
-            if info.id not in self._disabled and not info.error:
+            if info.id not in self._disabled and not info.error and not self.needs_approval(info.id):
                 self.activate(info.id)
 
     def is_enabled(self, plugin_id):
         return plugin_id not in self._disabled
 
+    def needs_approval(self, plugin_id):
+        """Anyone can drop a folder into the user's plugin folder, so its code doesn't run until they agree."""
+        info = self.plugins[plugin_id]
+        if os.path.normcase(os.path.dirname(info.folder)) != self._user_folder:
+            return False
+        return self._approved.get(plugin_id) != folder_fingerprint(info.folder)
+
+    def approve(self, plugin_id):
+        self._approved[plugin_id] = folder_fingerprint(self.plugins[plugin_id].folder)
+        self._save_state()
+
     def set_enabled(self, plugin_id, enabled):
         if enabled:
+            if self.needs_approval(plugin_id):
+                return
             self._disabled.discard(plugin_id)
             self.activate(plugin_id)
         else:
             self._disabled.add(plugin_id)
             self.deactivate(plugin_id)
-        save_json(self._state_path, {"disabled": sorted(self._disabled)})
+        self._save_state()
+
+    def _save_state(self):
+        save_json(self._state_path, {"disabled": sorted(self._disabled), "approved": self._approved})
 
     def _import(self, info):
         name = f"pdfdesk_plugin_{info.id}"

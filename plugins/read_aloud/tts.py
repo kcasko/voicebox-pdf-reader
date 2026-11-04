@@ -1,7 +1,9 @@
 """Built-in Kokoro voices, and a background worker that turns text into audio files."""
 
+import ctypes
 import hashlib
 import os
+import sys
 import threading
 import urllib.request
 import wave
@@ -83,18 +85,39 @@ _engine = None
 _engine_lock = threading.Lock()
 
 
+def voice_threads():
+    """How many CPU threads the voices should use: one per core this process may run on."""
+    total = os.cpu_count() or 1
+    allowed = total
+    if sys.platform == "win32":
+        kernel = ctypes.windll.kernel32
+        kernel.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel.GetProcessAffinityMask.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(ctypes.c_size_t)]
+        process_mask, system_mask = ctypes.c_size_t(), ctypes.c_size_t()
+        if kernel.GetProcessAffinityMask(kernel.GetCurrentProcess(), ctypes.byref(process_mask), ctypes.byref(system_mask)):
+            allowed = bin(process_mask.value).count("1") or total
+    # Most CPUs show two logical processors per core, and sharing a core doesn't speed the voices up.
+    return allowed if allowed < total else max(1, total // 2)
+
+
 def _load_engine(on_progress):
     global _engine
     if _engine is None:
         fetch_model(on_progress=on_progress)
         on_progress("Loading the voices...")
         # Imported here so the app still opens instantly.
+        import onnxruntime
         from kokoro_onnx import Kokoro
 
-        _engine = Kokoro(
-            os.path.join(MODEL_DIR, "kokoro-v1.0.onnx"),
-            os.path.join(MODEL_DIR, "voices-v1.0.bin"),
+        options = onnxruntime.SessionOptions()
+        options.intra_op_num_threads = voice_threads()
+        options.inter_op_num_threads = 1
+        # Busy-waiting between sentences wastes battery and fights the rest of the app for the CPU.
+        options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        session = onnxruntime.InferenceSession(
+            os.path.join(MODEL_DIR, "kokoro-v1.0.onnx"), options, providers=["CPUExecutionProvider"]
         )
+        _engine = Kokoro.from_session(session, os.path.join(MODEL_DIR, "voices-v1.0.bin"))
     return _engine
 
 

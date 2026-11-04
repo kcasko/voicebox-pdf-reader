@@ -91,6 +91,11 @@ class PdfDocument(QObject):
     def title(self):
         return os.path.basename(self.path) if self.path else "Untitled.pdf"
 
+    @property
+    def is_protected(self):
+        """True if the PDF has a password or permission restrictions."""
+        return bool(self.password or self._open_password or self.doc.metadata.get("encryption"))
+
     def __len__(self):
         return self.doc.page_count
 

@@ -77,7 +77,7 @@ def run(results_path, plugin_folders):
     out = os.path.join(folder, "check.mp3")
     export_module = sys.modules[module.__name__ + ".export"]
     export_module.Mp3Export(
-        module.api_for_check(), view.document, 0, 0, "bf_emma", 1.0, out, controller.cache_dir
+        module.api_for_check(), view.document, [0], "bf_emma", 1.0, out, controller.cache_dir
     ).start()
     done = _spin(lambda: bool(finished))
     check(

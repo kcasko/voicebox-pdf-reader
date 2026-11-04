@@ -1,3 +1,4 @@
+import html
 import time
 from collections import OrderedDict
 
@@ -19,6 +20,12 @@ MARKUP_TOOLS = {"highlight", "underline", "strike"}
 DRAW_TOOLS = {"note", "text", "shape", "ink"}
 SELECTION_COLOR = QColor(40, 120, 230, 80)
 SAFE_LINK_SCHEMES = {"http", "https", "mailto"}
+SPACE_SCROLL_SHARE = 0.9
+
+
+def literal(text):
+    """A dialog label that shows text from a PDF as written, rather than as markup."""
+    return f"<p>{html.escape(text)}</p>"
 
 
 class PdfView(QAbstractScrollArea):
@@ -196,6 +203,11 @@ class PdfView(QAbstractScrollArea):
             bar.setValue(bar.value() + bar.singleStep())
         elif key == Qt.Key_Up:
             bar.setValue(bar.value() - bar.singleStep())
+        elif key == Qt.Key_Space:
+            step = round(bar.pageStep() * SPACE_SCROLL_SHARE)
+            bar.setValue(bar.value() + (-step if event.modifiers() & Qt.ShiftModifier else step))
+        elif key in (Qt.Key_Right, Qt.Key_Left) and self.horizontalScrollBar().maximum() == 0:
+            self.go_to_page(self._current_page + (1 if key == Qt.Key_Right else -1))
         elif key == Qt.Key_Escape:
             self.clear_selection()
             self.set_tool("select")
@@ -449,12 +461,12 @@ class PdfView(QAbstractScrollArea):
         if kind == pymupdf.PDF_WIDGET_TYPE_CHECKBOX:
             self.document.set_widget_value(index, xref, not bool(info["value"]) or info["value"] == "Off")
         elif kind == pymupdf.PDF_WIDGET_TYPE_TEXT:
-            text, ok = QInputDialog.getMultiLineText(self, "Fill in field", info["name"] or "Value:", str(info["value"] or ""))
+            text, ok = QInputDialog.getMultiLineText(self, "Fill in field", literal(info["name"] or "Value:"), str(info["value"] or ""))
             if ok:
                 self.document.set_widget_value(index, xref, text)
         elif kind in (pymupdf.PDF_WIDGET_TYPE_COMBOBOX, pymupdf.PDF_WIDGET_TYPE_LISTBOX) and info["choices"]:
             choices = [c[1] if isinstance(c, (list, tuple)) else c for c in info["choices"]]
-            value, ok = QInputDialog.getItem(self, "Fill in field", info["name"] or "Value:", choices, editable=False)
+            value, ok = QInputDialog.getItem(self, "Fill in field", literal(info["name"] or "Value:"), choices, editable=False)
             if ok:
                 self.document.set_widget_value(index, xref, value)
 
@@ -468,9 +480,9 @@ class PdfView(QAbstractScrollArea):
             url = QUrl(link["uri"])
             # Other schemes can start programs on this computer, so a PDF doesn't get to use them.
             if url.scheme().lower() not in SAFE_LINK_SCHEMES:
-                QMessageBox.information(self, "Link blocked", f"This link isn't a web or email address, so it wasn't opened:\n\n{link['uri']}")
+                QMessageBox.information(self, "Link blocked", literal("This link isn't a web or email address, so it wasn't opened:") + literal(link["uri"]))
                 return
-            answer = QMessageBox.question(self, "Open link", f"Open this link?\n\n{link['uri']}")
+            answer = QMessageBox.question(self, "Open link", literal("Open this link?") + literal(link["uri"]))
             if answer == QMessageBox.Yes:
                 QDesktopServices.openUrl(url)
 

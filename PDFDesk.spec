@@ -83,6 +83,11 @@ a = Analysis(
 )
 # Python caches from development shouldn't ship.
 a.datas = [entry for entry in a.datas if "__pycache__" not in entry[0]]
+# The app uses Qt Widgets. These come along with PySide6 but nothing loads them, and
+# Qt Virtual Keyboard has stricter licence terms than the rest of Qt.
+UNUSED = ("qt6quick", "qt6qml", "qt6virtualkeyboard", "qtvirtualkeyboardplugin", "qtquick", "opengl32sw", "qt6pdf", "qt6webengine", "qt6charts", "qt6datavisualization", "qt63d")
+a.binaries = [entry for entry in a.binaries if not os.path.basename(entry[0]).lower().startswith(UNUSED)]
+a.datas = [entry for entry in a.datas if os.path.basename(entry[0]).lower() != "pyside6.qml"]
 pyz = PYZ(a.pure)
 
 if ONEFILE:
