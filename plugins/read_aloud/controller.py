@@ -8,14 +8,14 @@ import time
 
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
+from PySide6.QtMultimedia import QMediaDevices, QMediaPlayer
 
-from .textmodel import ChunkBuilder, find_furniture, first_chunk_at
+from .player import SentencePlayer
+from .textmodel import ChunkBuilder, find_furniture, first_chunk_at, pause_after
 from .tts import VOICES, Job, Synthesizer, has_audio, prune_cache
 
 PREFETCH = 4
 BUILD_AHEAD = 40
-HEADING_PAUSE_MS = 350
 FOLLOW_QUIET_SECONDS = 8
 RESUME_PAGE_DISTANCE = 1
 EMPTY_PAGES_BEFORE_HINT = 5
@@ -70,11 +70,9 @@ class ReadAloudController(QObject):
         self.synth.ready.connect(self._on_audio_ready)
         self.synth.failed.connect(self._on_audio_failed)
         self.synth.progress.connect(self.message)
-        self.audio = QAudioOutput()
-        self.player = QMediaPlayer()
-        self.player.setAudioOutput(self.audio)
-        if hasattr(self.player, "setPitchCompensation"):
-            self.player.setPitchCompensation(True)
+        self.player = SentencePlayer(self)
+        self.audio = self.player
+        self._in_pause = False
         self.player.mediaStatusChanged.connect(self._on_media_status)
         self.player.errorOccurred.connect(self._on_player_error)
         self._devices = QMediaDevices(self)
@@ -200,6 +198,7 @@ class ReadAloudController(QObject):
         self._pump()
 
     def pause(self):
+        self._in_pause = self._pause_timer.isActive()
         self._pause_timer.stop()
         if self.player.playbackState() == QMediaPlayer.PlayingState:
             self.player.pause()
@@ -207,7 +206,13 @@ class ReadAloudController(QObject):
         self.message.emit("Paused.")
 
     def resume(self):
-        if self.player.playbackState() == QMediaPlayer.PausedState:
+        if self._in_pause:
+            # Paused in the quiet between sentences, so go on to the next one.
+            self._in_pause = False
+            self.player.play()
+            self._set_state("playing")
+            self._advance()
+        elif self.player.playbackState() == QMediaPlayer.PausedState and self.player.source() == self._current_source():
             self.player.play()
             self._set_state("playing")
             self._announce()
@@ -215,9 +220,15 @@ class ReadAloudController(QObject):
             self._set_state("waiting")
             self._pump()
 
+    def _current_source(self):
+        if self.index >= len(self.chunks):
+            return QUrl()
+        return QUrl.fromLocalFile(self._job(self.chunks[self.index]).path)
+
     def stop(self):
         self._build_timer.stop()
         self._pause_timer.stop()
+        self._in_pause = False
         self.player.stop()
         self.player.setSource(QUrl())
         self.synth.set_jobs([])
@@ -267,6 +278,7 @@ class ReadAloudController(QObject):
 
     def _move_to(self, index):
         self._pause_timer.stop()
+        self._in_pause = False
         self.player.stop()
         self.index = index
         self._set_state("waiting")
@@ -285,10 +297,14 @@ class ReadAloudController(QObject):
             self.player.stop()
 
     def set_speed(self, speed):
+        changed = speed != self.speed
         self.speed = speed
         self.player.setPlaybackRate(speed)
         self.api.settings["speed"] = speed
         self.api.save_settings()
+        # The voice says each sentence at this speed, which sounds better than speeding up a recording.
+        if changed and self.state in ("playing", "waiting"):
+            self._move_to(self.index)
 
     def set_follow(self, follow):
         self.follow = follow
@@ -373,7 +389,7 @@ class ReadAloudController(QObject):
 
     # Audio
     def _job(self, chunk):
-        return Job(self.cache_for(self.document), VOICES[self.voice_name], chunk.spoken)
+        return Job(self.cache_for(self.document), VOICES[self.voice_name], chunk.spoken, self.speed)
 
     def _queue_audio(self):
         wanted = self.chunks[self.index : self.index + PREFETCH + 1]
@@ -424,11 +440,7 @@ class ReadAloudController(QObject):
     def _on_media_status(self, status):
         if status != QMediaPlayer.EndOfMedia or self.state != "playing":
             return
-        chunk = self.chunks[self.index]
-        if chunk.heading:
-            self._pause_timer.start(round(HEADING_PAUSE_MS / max(self.speed, 0.1)))
-        else:
-            self._advance()
+        self._pause_timer.start(round(pause_after(self.chunks[self.index], self.speed) * 1000))
 
     def _on_player_error(self, _error, text):
         if self.state != "idle":

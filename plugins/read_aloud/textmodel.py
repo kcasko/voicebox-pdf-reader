@@ -16,6 +16,9 @@ FURNITURE_SAMPLE = 24
 FURNITURE_SHARE = 0.3
 HEADING_SIZE_RATIO = 1.15
 HEADING_MAX_CHARS = 120
+SENTENCE_PAUSE = 0.35
+CLAUSE_PAUSE = 0.12
+HEADING_PAUSE = 0.6
 FOOTNOTE_SIZE_RATIO = 0.85
 FOOTNOTE_ZONE = 0.7
 BULLETS = set("•▪◦■●‣⁃·")
@@ -622,6 +625,17 @@ class ChunkBuilder:
                 keys=frozenset((page, word.index) for page, word in sources),
             )
         )
+
+
+def pause_after(chunk, speed=1.0):
+    """Seconds of quiet after a chunk, on top of the little silence the voice leaves by itself."""
+    if chunk.heading:
+        seconds = HEADING_PAUSE
+    elif SENTENCE_END.search(chunk.text) or not chunk.text[-1:].isalnum():
+        seconds = SENTENCE_PAUSE
+    else:
+        seconds = CLAUSE_PAUSE
+    return seconds / max(speed, 0.1)
 
 
 def first_chunk_at(chunks, page, word):

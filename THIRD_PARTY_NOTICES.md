@@ -9,8 +9,7 @@ versions. The Source links below are where each project publishes its source cod
 
 The source of the copyleft components below, in the versions included, is published with each
 release of PDF Desk at https://github.com/kcasko/voicebox-pdf-reader/releases. `SOURCES.txt` there
-lists each archive and its hash. The FFmpeg libraries included with Qt Multimedia aren't in that
-list yet.
+lists each archive and its hash.
 
 This list was prepared from package metadata and project pages, and hasn't had a legal review.
 
@@ -31,7 +30,6 @@ You may replace these with your own builds: they are separate files in the app's
 | Component | Used for | Licence | Source |
 |---|---|---|---|
 | PySide6 and Qt | Windows, controls, audio playback | LGPL-3.0 (also offered under GPL) | https://code.qt.io/cgit/pyside/pyside-setup.git |
-| FFmpeg libraries included with Qt Multimedia | Audio playback | LGPL | https://ffmpeg.org |
 | lameenc and LAME | MP3 export | LGPL-3.0-or-later | https://github.com/chrisstaite/lameenc |
 
 ## Permissive

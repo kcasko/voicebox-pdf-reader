@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import wave
 
 LOG = sys.argv[1] if len(sys.argv) > 1 else None
 
@@ -133,11 +134,19 @@ def main():
     spin(lambda: controller.state == "playing", 60)
     check("Previous moves one sentence", controller.index == index)
 
-    # Rate has to actually shorten playback, not just change a label.
+    # Speed is built into the audio, so a faster sentence has to come out shorter.
+    def sentence_seconds():
+        with wave.open(controller.player.source().toLocalFile()) as f:
+            return f.getnframes() / f.getframerate()
+
+    spin(lambda: controller.state == "playing", 60)
+    normal = sentence_seconds()
     controller.set_speed(2.0)
-    wait(0.5)
-    check("Speed applies during playback", abs(controller.player.playbackRate() - 2.0) < 0.01)
+    spin(lambda: controller.state == "playing", 120)
+    fast = sentence_seconds()
+    check("Speed makes the sentence shorter", fast < normal * 0.7, f"{normal:.2f}s then {fast:.2f}s")
     controller.set_speed(1.0)
+    spin(lambda: controller.state == "playing", 120)
 
     old_path = controller._job(controller.chunks[controller.index]).path
     controller.set_voice("George")

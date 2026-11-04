@@ -46,10 +46,6 @@ COMPONENTS = [
     (None, "6.12.0", "Qt", "LGPL-3.0", "qt-everywhere-src-6.12.0.tar.xz",
      "https://download.qt.io/official_releases/qt/6.12/6.12.0/single/qt-everywhere-src-6.12.0.tar.xz", None),
 ]
-NOT_COLLECTED = [
-    "FFmpeg libraries in Qt Multimedia (avcodec-63, avformat-63, avutil-61, swresample-7, swscale-10): "
-    "Qt builds these, and the exact FFmpeg source hasn't been identified. See https://ffmpeg.org.",
-]
 
 
 def download(url, path):
@@ -92,14 +88,11 @@ def main():
         print(f"  {size / BLOCK:.0f} MB, hash {'matches the published one' if expected else 'recorded'}", flush=True)
         rows.append({"component": label, "version": version, "licence": licence, "file": name, "from": url, "sha256": actual, "hash_published_upstream": bool(expected), "bytes": size})
     with open(os.path.join(TARGET, "sources.json"), "w", encoding="utf-8") as out:
-        json.dump({"components": rows, "not_collected": NOT_COLLECTED}, out, indent=2)
+        json.dump({"components": rows}, out, indent=2)
     with open(os.path.join(TARGET, "SOURCES.txt"), "w", encoding="utf-8") as out:
         out.write("Source code for the copyleft components included in PDF Desk.\n\n")
         for row in rows:
             out.write(f"{row['component']} {row['version']} ({row['licence']})\n  {row['file']}\n  from {row['from']}\n  SHA-256 {row['sha256']}\n\n")
-        out.write("Not collected:\n")
-        for note in NOT_COLLECTED:
-            out.write(f"  {note}\n")
     print(f"Total {sum(r['bytes'] for r in rows) / BLOCK:.0f} MB in {TARGET}")
 
 

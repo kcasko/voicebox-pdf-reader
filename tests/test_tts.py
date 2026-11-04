@@ -31,7 +31,19 @@ def test_wav_is_normalized_and_readable(tmp_path):
     with wave.open(path) as f:
         assert (f.getframerate(), f.getnchannels(), f.getsampwidth()) == (24000, 1, 2)
         samples = numpy.frombuffer(f.readframes(3), dtype=numpy.int16)
-    assert abs(samples).max() == pytest.approx(32767 * tts.PEAK_LEVEL, abs=2)
+    assert abs(samples).max() <= 32767 * tts.PEAK_LEVEL
+
+
+def test_sentences_end_up_about_equally_loud(tmp_path):
+    def level(amount):
+        path = str(tmp_path / f"{amount}.wav")
+        wave_samples = numpy.sin(numpy.arange(24000) * 0.05).astype(numpy.float32) * amount
+        tts.write_wav(wave_samples, 24000, path)
+        with wave.open(path) as f:
+            values = numpy.frombuffer(f.readframes(24000), dtype=numpy.int16) / 32767
+        return float(numpy.sqrt(numpy.mean(values**2)))
+
+    assert level(0.2) == pytest.approx(level(0.6), rel=0.01)
 
 
 def test_silent_audio_is_an_error(tmp_path):

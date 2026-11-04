@@ -18,6 +18,8 @@ MODEL_FILES = {
 }
 DOWNLOAD_BLOCK = 1024 * 1024
 PEAK_LEVEL = 0.95
+LOUDNESS_LEVEL = 0.1
+AUDIO_FORMAT = "v2"
 CACHE_LIMIT_BYTES = 2 * 1024**3
 
 VOICES = {
@@ -122,13 +124,15 @@ def _load_engine(on_progress):
 
 
 def write_wav(samples, rate, path):
-    """Save float samples as 16-bit audio at a consistent volume."""
+    """Save float samples as 16-bit audio, with every sentence about as loud as the last."""
     import numpy
 
     peak = float(numpy.abs(samples).max()) if len(samples) else 0.0
     if peak <= 0:
         raise VoiceError("No audio was generated for this text.")
-    scaled = numpy.clip(samples * (PEAK_LEVEL / peak), -1.0, 1.0)
+    # Matching peaks makes loudness jump between sentences, so match average level instead.
+    level = float(numpy.sqrt(numpy.mean(numpy.square(samples))))
+    scaled = numpy.clip(samples * min(LOUDNESS_LEVEL / level, PEAK_LEVEL / peak), -1.0, 1.0)
     with wave.open(path, "wb") as out:
         out.setnchannels(1)
         out.setsampwidth(2)
@@ -137,8 +141,7 @@ def write_wav(samples, rate, path):
 
 
 def audio_path(cache_dir, voice_id, text, speed=1.0):
-    # Playback changes speed by itself, so only export makes audio at another speed.
-    label = f"{voice_id}|{text}" if speed == 1.0 else f"{voice_id}|{speed}|{text}"
+    label = f"{AUDIO_FORMAT}|{voice_id}|{speed}|{text}"
     key = hashlib.sha1(label.encode("utf-8")).hexdigest()
     return os.path.join(cache_dir, key + ".wav")
 

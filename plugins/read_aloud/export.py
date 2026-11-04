@@ -9,10 +9,9 @@ import lameenc
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
 from PySide6.QtWidgets import QMessageBox, QProgressDialog
 
-from .textmodel import ChunkBuilder, find_furniture
+from .textmodel import ChunkBuilder, find_furniture, pause_after
 from .tts import Job, Synthesizer, has_audio
 
-HEADING_SILENCE_SECONDS = 0.35
 MP3_BIT_RATE = 128
 MP3_QUALITY = 2
 READ_FRAMES = 65536
@@ -122,7 +121,7 @@ class Mp3Export(QObject):
 
     def _encode(self):
         items = [
-            (job.path, HEADING_SILENCE_SECONDS / self.speed if chunk.heading else 0)
+            (job.path, pause_after(chunk, self.speed))
             for chunk, job in zip(self.chunks, self.jobs)
         ]
         self.jobs = []

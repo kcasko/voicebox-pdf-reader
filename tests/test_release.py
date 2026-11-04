@@ -643,6 +643,165 @@ def test_canceling_export_shows_no_error(window, tmp_path, monkeypatch):
     assert not calls
 
 
+# Playback
+class FakeSink:
+    """Stands in for the sound device: plays whatever it's given at real speed, on demand."""
+
+    def __init__(self, rate=24000):
+        self.rate = rate
+        self.received = bytearray()
+        self.processed = 0
+        self.stopped = self.suspended = False
+        self.starts = 0
+
+    def setBufferSize(self, size):
+        self.size = size
+
+    def setVolume(self, volume):
+        self.volume = volume
+
+    def start(self):
+        self.starts += 1
+        return self
+
+    def write(self, data):
+        self.received.extend(data)
+        return len(data)
+
+    def bytesFree(self):
+        return self.size - (len(self.received) - self.processed)
+
+    def processedUSecs(self):
+        return self.processed * 1_000_000 // (self.rate * 2)
+
+    def advance(self, seconds):
+        self.processed = min(len(self.received), self.processed + int(self.rate * 2 * seconds))
+
+    def stop(self):
+        self.stopped = True
+
+    def suspend(self):
+        self.suspended = True
+
+    def resume(self):
+        self.suspended = False
+
+
+def sentence_player(qapp):
+    export_module()
+    player_module = sys.modules.get("read_aloud_pkg.player")
+    if player_module is None:
+        import importlib
+
+        player_module = importlib.import_module("read_aloud_pkg.player")
+    sink = FakeSink()
+    player = player_module.SentencePlayer(sink_factory=lambda fmt, device: sink)
+    return player, sink
+
+
+def run_player(player, sink, seconds):
+    for _ in range(int(seconds / 0.01)):
+        player._tick()
+        sink.advance(0.01)
+
+
+def test_the_stream_stays_open_across_sentences(qapp, tmp_path):
+    from PySide6.QtCore import QUrl
+
+    player, sink = sentence_player(qapp)
+    ended = []
+    player.mediaStatusChanged.connect(ended.append)
+    player.setSource(QUrl.fromLocalFile(make_wav(tmp_path / "a.wav", 0.5)))
+    player.play()
+    run_player(player, sink, 0.2)
+    assert not ended
+    assert player.position() > 0
+    run_player(player, sink, 0.8)
+    assert len(ended) == 1
+    # Between sentences the stream keeps going, carrying silence.
+    before = len(sink.received)
+    run_player(player, sink, 0.4)
+    assert len(sink.received) > before and not any(sink.received[before:])
+    player.setSource(QUrl.fromLocalFile(make_wav(tmp_path / "b.wav", 0.3)))
+    player.play()
+    run_player(player, sink, 1.0)
+    assert len(ended) == 2
+    assert sink.starts == 1 and not sink.stopped
+    player.stop()
+    assert sink.stopped
+
+
+def test_pausing_holds_the_position(qapp, tmp_path):
+    from PySide6.QtCore import QUrl
+    from PySide6.QtMultimedia import QMediaPlayer
+
+    player, sink = sentence_player(qapp)
+    player.setSource(QUrl.fromLocalFile(make_wav(tmp_path / "a.wav", 0.5)))
+    player.play()
+    run_player(player, sink, 0.1)
+    player.pause()
+    assert sink.suspended and player.playbackState() == QMediaPlayer.PausedState
+    player.play()
+    assert not sink.suspended and player.playbackState() == QMediaPlayer.PlayingState
+
+
+def test_a_missing_audio_file_reports_an_error(qapp, tmp_path):
+    from PySide6.QtCore import QUrl
+
+    player, _sink = sentence_player(qapp)
+    errors = []
+    player.errorOccurred.connect(lambda _e, text: errors.append(text))
+    player.setSource(QUrl.fromLocalFile(str(tmp_path / "missing.wav")))
+    assert errors
+
+
+def test_pauses_suit_what_just_ended():
+    from reading_corpus import load_textmodel
+
+    module = load_textmodel()
+    sentence = module.Chunk("It works well.", 0, 0, 0, 0)
+    heading = module.Chunk("Chapter One.", 0, 0, 0, 0, heading=True)
+    clause = module.Chunk("and then it carried on, with", 0, 0, 0, 0)
+    assert module.pause_after(heading) > module.pause_after(sentence) > module.pause_after(clause) > 0
+    assert module.pause_after(sentence, 2.0) == pytest.approx(module.pause_after(sentence) / 2)
+
+
+def test_resuming_in_a_pause_goes_on_to_the_next_sentence(window, tmp_path):
+    win = window([PLUGINS])
+    controller = win.plugins.plugins["read_aloud"].module._controller
+    controller.audio.setVolume(0)
+    controller.synth.set_jobs = lambda jobs: None
+    view = win.open_path(multi_page(tmp_path / "a.pdf"))
+    controller.read_from(view.document, 0)
+    for _ in range(6):
+        controller._build_tick()
+    controller.state = "playing"
+    controller._pause_timer.start(5000)
+    first = controller.index
+    controller.pause()
+    assert controller.state == "paused"
+    controller.resume()
+    assert controller.index == first + 1
+    controller.stop()
+
+
+def test_changing_speed_makes_new_audio(window, tmp_path):
+    win = window([PLUGINS])
+    controller = win.plugins.plugins["read_aloud"].module._controller
+    controller.audio.setVolume(0)
+    controller.synth.set_jobs = lambda jobs: None
+    view = win.open_path(multi_page(tmp_path / "a.pdf"))
+    controller.read_from(view.document, 0)
+    for _ in range(6):
+        controller._build_tick()
+    chunk = controller.chunks[0]
+    slow = controller._job(chunk).path
+    controller.set_speed(1.5)
+    assert controller._job(chunk).speed == 1.5 and controller._job(chunk).path != slow
+    controller.set_speed(1.0)
+    controller.stop()
+
+
 def test_export_speed_gets_its_own_audio():
     export_module()
     tts = sys.modules["read_aloud_pkg.tts"]
