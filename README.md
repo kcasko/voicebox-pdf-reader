@@ -1,12 +1,19 @@
 # PDF Desk
 
-A PDF reader and editor for Windows with a plugin system. Read Aloud, the main
-plugin, reads PDFs with natural Kokoro voices that run inside the app. Nothing
-else needs to be open or installed.
+Listen to your PDFs with natural voices that run on your own computer: no account and no uploads.
+It's also a PDF reader and editor for Windows. It's an early beta, and reads English only.
 
-## Run it
+## Install
 
-Run `dist\PDFDesk\PDFDesk.exe`. It needs nothing else installed and opens in under
+Get the installer from [Releases](https://github.com/kcasko/voicebox-pdf-reader/releases). It needs
+no administrator rights, and it doesn't change your default PDF app. Windows may warn about an
+unknown publisher, because the beta isn't code-signed yet.
+
+Found a problem? See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Run a build
+
+After building, run `dist\PDFDesk\PDFDesk.exe`. It needs nothing else installed and opens in under
 2 seconds, but it has to stay inside its folder. This is the version to distribute,
 through the installer below.
 
