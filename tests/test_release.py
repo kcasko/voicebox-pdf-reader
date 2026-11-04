@@ -696,6 +696,8 @@ def sentence_player(qapp):
         player_module = importlib.import_module("read_aloud_pkg.player")
     sink = FakeSink()
     player = player_module.SentencePlayer(sink_factory=lambda fmt, device: sink)
+    # Test machines may have no sound device, and these tests don't need one.
+    player.setDevice(object())
     return player, sink
 
 
@@ -753,6 +755,21 @@ def test_a_missing_audio_file_reports_an_error(qapp, tmp_path):
     player.errorOccurred.connect(lambda _e, text: errors.append(text))
     player.setSource(QUrl.fromLocalFile(str(tmp_path / "missing.wav")))
     assert errors
+
+
+def test_a_computer_with_no_sound_output_gets_a_clear_message(qapp, tmp_path, monkeypatch):
+    from PySide6.QtCore import QUrl
+    from PySide6.QtMultimedia import QAudioDevice, QMediaDevices, QMediaPlayer
+
+    player, _sink = sentence_player(qapp)
+    player.setDevice(None)
+    monkeypatch.setattr(QMediaDevices, "defaultAudioOutput", staticmethod(lambda: QAudioDevice()))
+    errors = []
+    player.errorOccurred.connect(lambda _e, text: errors.append(text))
+    player.setSource(QUrl.fromLocalFile(make_wav(tmp_path / "a.wav", 0.2)))
+    player.play()
+    assert errors == ["No sound output was found."]
+    assert player.playbackState() == QMediaPlayer.StoppedState
 
 
 def test_pauses_suit_what_just_ended():
