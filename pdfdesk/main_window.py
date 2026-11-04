@@ -73,6 +73,18 @@ def fit_rect(frame, available):
     return QRect(x, y, width, height)
 
 
+def open_failure_reason(path, error):
+    """Say why a file wouldn't open, in words that suggest what to do next."""
+    if isinstance(error, ValueError):
+        return str(error)
+    try:
+        with open(path, "rb") as f:
+            f.read(1)
+    except OSError:
+        return "Windows couldn't read this file. If it's in OneDrive or another cloud folder, check that the file has downloaded, then try again."
+    return "The file is damaged or incomplete. Try downloading it again, or opening it in the program that made it."
+
+
 def page_list(pages):
     """Name pages exactly, so nobody deletes ones they weren't looking at."""
     numbers = [str(page + 1) for page in pages]
@@ -516,7 +528,8 @@ class MainWindow(QMainWindow):
                 if not ok:
                     return None
             except Exception as e:
-                QMessageBox.warning(self, APP_NAME, f"Could not open {os.path.basename(path)}.\n\n{e}")
+                log.warning("Could not open %s: %s", path, e)
+                QMessageBox.warning(self, APP_NAME, f"Could not open {os.path.basename(path)}.\n\n{open_failure_reason(path, e)}")
                 return None
 
     def _add_recent(self, path):

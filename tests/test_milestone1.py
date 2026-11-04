@@ -135,6 +135,9 @@ def test_references_are_only_removed_when_asked():
     text = "It works [3] well (Lee, 2019)."
     assert tm.spoken_text(text) == text
     assert tm.spoken_text(text, True) == "It works well."
+    assert tm.spoken_text("See https://a.example/b for more.", True) == "See a link for more."
+    assert tm.spoken_text("17", True) == ""
+    assert tm.spoken_text("Pads: control the sounds -") == "Pads: control the sounds"
     # A figure in brackets that isn't a citation stays.
     assert tm.spoken_text("The total (about 2019 people) grew.", True) == "The total (about 2019 people) grew."
 

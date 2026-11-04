@@ -104,7 +104,7 @@ def citations(path):
     page = doc.new_page()
     _box(page, (72, 72, 540, 300), "Sleep improves memory [12] as earlier work has shown (Smith et al., 2020; Lee, 2019). Details are at https://example.com/paper for anyone interested. Jones (2021) disagreed with this finding.", 11)
     doc.save(path)
-    return ["Sleep improves memory as earlier work has shown. Details are at for anyone interested. Jones disagreed with this finding."]
+    return ["Sleep improves memory as earlier work has shown. Details are at a link for anyone interested. Jones disagreed with this finding."]
 
 
 def sentence_rules(path):
@@ -134,7 +134,35 @@ def footnote_and_references(path):
     return [LEFT + " The team wrote up what it found and shared the results with everyone taking part."]
 
 
+def bold_quote(path):
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "The guidance says this about the whole process in detail.", fontsize=11)
+    page.insert_text((72, 130), "Your company is responsible for testing the", fontname="hebo", fontsize=11)
+    page.insert_text((72, 144), "driver during product development and release.", fontname="hebo", fontsize=11)
+    page.insert_text((72, 170), "Plain text carries on after the bold part of the page here.", fontsize=11)
+    doc.save(path)
+    return ["The guidance says this about the whole process in detail. Your company is responsible for testing the driver during product development and release. Plain text carries on after the bold part of the page here."]
+
+
+def contents_page(path):
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 80), "Contents", fontname="hebo", fontsize=16)
+    for row, entry in enumerate(("Chapter One 5", "Chapter Two 25", "Chapter Three 50", "Index 99")):
+        page.insert_text((72, 110 + row * 16), entry, fontsize=11)
+    doc.new_page().insert_text((72, 80), "Chapter Four continued 120", fontsize=11)
+    doc[1].insert_text((72, 96), "Chapter Five continued 140", fontsize=11)
+    doc[1].insert_text((72, 112), "Chapter Six continued 160", fontsize=11)
+    doc[1].insert_text((72, 128), "Chapter Seven continued 180", fontsize=11)
+    doc.new_page().insert_text((72, 80), "The story really starts here on this page.", fontsize=11)
+    doc.save(path)
+    return ["The story really starts here on this page."]
+
+
 CASES = {
+    "bold_quote": bold_quote,
+    "contents_page": contents_page,
     "right_first": right_first,
     "interleaved": interleaved,
     "interleaved_lines": interleaved_lines,

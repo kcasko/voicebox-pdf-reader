@@ -40,6 +40,15 @@ SENTENCE_END = re.compile(r"[.!?][\"'”’)\]]*$")
 INITIAL = re.compile(r"^[A-Z]\.$")
 ACRONYM = re.compile(r"^(?:[A-Za-z]\.){2,}$")
 LIST_MARKER = re.compile(r"^\d{1,3}[.)]$")
+CONTENTS_WORD = re.compile(r"(?:^|\s)(?:table of )?contents(?:$|\s)", re.I)
+ENDS_IN_PAGE_NUMBER = re.compile(r"(?:\.{2,}|\s)\s*(?:\d{1,4}|[ivxlc]+)$", re.I)
+CONTENTS_SHARE = 0.5
+CONTENTS_MIN_LINES = 4
+CONTENTS_RISING_SHARE = 0.9
+ONLY_NUMBERS = re.compile(r"^[\d\s.,:;()-]+$")
+# Fonts often store bullets in the private-use part of Unicode, which has no sound.
+PRIVATE_USE = re.compile("[\ue000-\uf8ff]")
+LINK_WORDS = "a link"
 REFERENCE_HEADING = re.compile(r"^(?:[\dIVX]+\.?\s+)?(?:references|bibliography|works cited|literature cited)\.?$", re.I)
 
 # Column detection: a gutter is an empty vertical strip in the middle part of the page.
@@ -160,12 +169,19 @@ NUMBER_FORMS = [
 def spoken_text(text, skip_references=False):
     """What the voice should say for a chunk. The page and the panel keep showing the original text."""
     if skip_references:
-        for pattern in (URL, NUMBERED_CITATION, AUTHOR_CITATION, YEAR_CITATION):
+        # Saying that a link was there keeps the sentence making sense: "details are at a link".
+        text = URL.sub(LINK_WORDS, text)
+        for pattern in (NUMBERED_CITATION, AUTHOR_CITATION, YEAR_CITATION):
             text = pattern.sub("", text)
+        # A line of nothing but numbers is a leftover page number or table cell.
+        if ONLY_NUMBERS.match(text) or not any(c.isalnum() for c in text.replace(LINK_WORDS, "")):
+            return ""
+    text = PRIVATE_USE.sub(" ", text)
     for pattern, replacement in NUMBER_FORMS:
         text = pattern.sub(replacement, text)
     for pattern, replacement in SPOKEN_WORDS:
         text = pattern.sub(replacement, text)
+    text = re.sub(r"\s+[-–—]\s*$", "", text)
     text = re.sub(r"\s+([,.;:!?])", r"\1", text)
     text = re.sub(r"\s{2,}", " ", text).strip()
     # The voices are English, so text with no Latin letters or numbers would come out as nonsense.
@@ -367,8 +383,31 @@ def _style_at(line, styles):
     return None
 
 
-def _is_heading(line, styles, body, bold_share):
+def is_contents_page(lines, carried_on=False):
+    """A table of contents, either titled as one or carrying on from the page before."""
+    if len(lines) < CONTENTS_MIN_LINES:
+        return False
+    numbered = [m for m in (ENDS_IN_PAGE_NUMBER.search(line.text.strip()) for line in lines) if m]
+    if len(numbered) / len(lines) < CONTENTS_SHARE:
+        return False
+    if carried_on or any(CONTENTS_WORD.search(line.text.strip()) for line in lines):
+        return True
+    # No title, but page numbers that only ever go up are a contents list. A table's numbers aren't.
+    numbers = [int(m[0].strip(" .")) for m in numbered if m[0].strip(" .").isdecimal()]
+    rising = sum(b >= a for a, b in zip(numbers, numbers[1:]))
+    return len(numbers) >= CONTENTS_MIN_LINES + 1 and rising >= (len(numbers) - 1) * CONTENTS_RISING_SHARE
+
+
+def _is_heading(line, styles, body, bold_share, next_line=None):
     if len(line.text) > HEADING_MAX_CHARS or not any(c.isalpha() for c in line.text):
+        return False
+    # Emphasized text in a sentence isn't a title: a title doesn't start in lowercase or run on into one.
+    if line.text.lstrip("\"'“‘([")[:1].islower():
+        return False
+    if next_line is not None and next_line.words[0].block == line.words[0].block and next_line.text.lstrip("\"'“‘([")[:1].islower():
+        return False
+    # Amounts in a bold table row are data.
+    if sum(c.isdigit() for c in line.text) > sum(c.isalpha() for c in line.text) * 0.2:
         return False
     style = _style_at(line, styles)
     if style is None:
@@ -420,6 +459,7 @@ class ChunkBuilder:
         self.chunks = []
         self._tokens = []
         self._in_references = False
+        self._in_contents = False
 
     def feed(self, index, first_word=0, last_word=None):
         page = self.document.page(index)
@@ -434,12 +474,18 @@ class ChunkBuilder:
         ]
         if not lines:
             return
+        if self.skip_references and first_word == 0 and last_word is None:
+            self._in_contents = is_contents_page(lines, self._in_contents)
+            if self._in_contents:
+                return
         styles, body, bold_share = _page_styles(page)
-        for line in reading_order(lines, page.rect.width):
+        ordered = reading_order(lines, page.rect.width)
+        for position, line in enumerate(ordered):
             if line.words[-1].index < first_word or (last_word is not None and line.words[0].index > last_word):
                 continue
             words = [w for w in line.words if w.index >= first_word and (last_word is None or w.index <= last_word)]
-            if _is_heading(line, styles, body, bold_share):
+            following = ordered[position + 1] if position + 1 < len(ordered) else None
+            if _is_heading(line, styles, body, bold_share, following):
                 if heading and heading[-1].block != words[0].block:
                     self._emit_heading(index, heading)
                     heading = []
@@ -476,7 +522,7 @@ class ChunkBuilder:
             text = word.text.strip()
             if not text:
                 continue
-            if all(c in BULLETS for c in text):
+            if all(c in BULLETS or PRIVATE_USE.match(c) for c in text):
                 self._flush()
                 continue
             text = text.lstrip("".join(BULLETS)) or text
@@ -498,6 +544,12 @@ class ChunkBuilder:
         if not self._tokens:
             return False
         previous = self._tokens[-1]
+        if previous.ends_line and re.search(r"\w-$", previous.text) and text[:1].isdigit():
+            # A name or number broken after its own hyphen, like "gpt-4-" and "0125".
+            previous.text += text
+            previous.sources.append((index, word))
+            previous.ends_line = False
+            return True
         if previous.ends_line and re.search(r"[A-Za-z]{2}-$", previous.text) and re.match(r"[a-z]{2}", text):
             keep_hyphen = previous.text[:-1].lower() in COMPOUND_PREFIXES
             previous.text = (previous.text if keep_hyphen else previous.text[:-1]) + text

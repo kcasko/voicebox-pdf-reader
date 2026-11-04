@@ -320,6 +320,62 @@ def test_text_the_voices_cant_read_is_skipped():
     assert tm.spoken_text("94.2") == "94.2"
 
 
+# Problems found on real PDFs
+def chunks_for(document, skip=True):
+    builder = tm.ChunkBuilder(document, frozenset(), skip)
+    for index in range(len(document)):
+        builder.feed(index)
+    return builder.finish()
+
+
+def test_bold_table_rows_arent_headings(qapp, pdf_factory):
+    document = PdfDocument(pdf_factory([[(100, "Revenue 960 1,001 3,859", "hebo"), (120, "This ordinary sentence of body text follows the bold row.")]]))
+    assert not chunks_for(document)[0].heading
+    document.close()
+
+
+def test_bold_lowercase_line_isnt_a_heading(qapp, pdf_factory):
+    document = PdfDocument(pdf_factory([[(100, "carries on from the line before it", "hebo"), (120, "This ordinary sentence of body text follows the bold line.")]]))
+    assert not chunks_for(document)[0].heading
+    document.close()
+
+
+def test_symbol_font_bullets_arent_spoken():
+    assert "" not in tm.spoken_text("Actions:  Configuring a driver")
+    assert tm.spoken_text("") == ""
+
+
+def test_a_name_broken_after_its_hyphen_stays_whole(qapp, pdf_factory):
+    document = PdfDocument(pdf_factory([[(100, "The model called gpt-4-"), (114, "0125 is the newest version here.")]]))
+    assert "gpt-4-0125" in chunks_for(document)[0].text
+    document.close()
+
+
+def test_untitled_contents_page_is_skipped_but_a_table_isnt(qapp, pdf_factory):
+    contents = PdfDocument(pdf_factory([[(100 + i * 16, f"Section number {name} {page}") for i, (name, page) in enumerate(zip("abcdef", (3, 7, 11, 12, 14, 18)))]]))
+    assert chunks_for(contents) == []
+    contents.close()
+    table = PdfDocument(pdf_factory([[(100 + i * 16, f"Revenue line {name} {value}") for i, (name, value) in enumerate(zip("abcdef", (90, 12, 55, 7, 81, 3)))]]))
+    assert chunks_for(table)
+    table.close()
+
+
+def test_contents_pages_are_read_when_skipping_is_off(qapp, pdf_factory):
+    document = PdfDocument(pdf_factory([[(100 + i * 16, f"Section number {name} {i + 1}") for i, name in enumerate("abcdef")]]))
+    assert chunks_for(document, skip=False)
+    document.close()
+
+
+def test_failure_messages_say_what_to_do(tmp_path, monkeypatch):
+    from pdfdesk.main_window import open_failure_reason
+
+    path = tmp_path / "bad.pdf"
+    path.write_bytes(b"%PDF-1.7 truncated")
+    assert "damaged" in open_failure_reason(str(path), RuntimeError("raw message"))
+    assert open_failure_reason(str(path), ValueError("This PDF has no pages.")) == "This PDF has no pages."
+    assert "OneDrive" in open_failure_reason(str(tmp_path / "unreadable.pdf"), RuntimeError("raw message"))
+
+
 # File safety
 def test_copies_of_a_password_pdf_keep_the_password(qapp, tmp_path):
     source = protected(tmp_path / "p.pdf", user_pw="secret", owner_pw="boss")
